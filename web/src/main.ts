@@ -1,4 +1,9 @@
-import { DEFAULT_FLOCK_THEME, FlockView, type FlockTheme } from "./render";
+import {
+  DEFAULT_FLOCK_THEME,
+  FlockView,
+  type BirdShape,
+  type FlockTheme,
+} from "./render";
 import {
   type ClassicModelConfig,
   initWasmModule,
@@ -22,16 +27,18 @@ const DEFAULT_BOUNCE_X = false;
 const DEFAULT_BOUNCE_Y = false;
 const DEFAULT_BOUNCE_Z = true;
 const DEFAULT_MATH_MODE: SimMathMode = "accurate";
-const DEFAULT_NEIGHBOR_CAP = 48;
-const DEFAULT_RENDER_STRIDE = 1;
-const DEFAULT_PROFILE_ENABLED = true;
+const DEFAULT_NEIGHBOR_CAP = 7;
+const DEFAULT_MENU_OPEN = true;
 const DEFAULT_MAX_FORCE = 0.15;
 const DEFAULT_DRAG = 0.09;
 const DEFAULT_MIN_DISTANCE = 0.5;
 const DEFAULT_HARD_MIN_DISTANCE = 0.02;
 const DEFAULT_JITTER_STRENGTH = 0.6;
-const DEFAULT_ACTIVE_BIRDS = 4_200;
+const DEFAULT_ACTIVE_BIRDS = 1_000;
 const DEFAULT_MODEL_KIND: SimModelKind = "classic";
+const DEFAULT_BIRD_SIZE = DEFAULT_FLOCK_THEME.particleSize;
+const DEFAULT_BIRD_OPACITY = DEFAULT_FLOCK_THEME.particleAlpha;
+const DEFAULT_BIRD_SHAPE: BirdShape = DEFAULT_FLOCK_THEME.particleShape;
 const DEFAULT_CLASSIC_CONFIG: ClassicModelConfig = {
   mathMode: DEFAULT_MATH_MODE,
   maxNeighborsSampled: DEFAULT_NEIGHBOR_CAP,
@@ -122,6 +129,14 @@ const RANDOM_PALETTES: PaletteSpec[] = [
   },
 ];
 
+type ControlLegendTokens = {
+  simCore: string[];
+  classic: string[];
+  social: string[];
+  flight: string[];
+  cosmetics: string[];
+};
+
 function sliderIndexToNeighborCap(index: number): number {
   const clampedIndex = Math.min(
     K_SLIDER_MAX_INDEX,
@@ -175,14 +190,17 @@ async function start(): Promise<void> {
   let bounceX = DEFAULT_BOUNCE_X;
   let bounceY = DEFAULT_BOUNCE_Y;
   let bounceZ = DEFAULT_BOUNCE_Z;
-  let renderStride = DEFAULT_RENDER_STRIDE;
-  let profileEnabled = DEFAULT_PROFILE_ENABLED;
+  let birdSize = DEFAULT_BIRD_SIZE;
+  let birdOpacity = DEFAULT_BIRD_OPACITY;
+  let birdShape: BirdShape = DEFAULT_BIRD_SHAPE;
+  let menuOpen = DEFAULT_MENU_OPEN;
   const classicConfig: ClassicModelConfig = { ...DEFAULT_CLASSIC_CONFIG };
   const flock2Social: Flock2SocialConfig = { ...DEFAULT_FLOCK2_SOCIAL };
   const flock2Flight: Flock2FlightConfig = { ...DEFAULT_FLOCK2_FLIGHT };
 
   const totalBoids = sim.getCount();
   let activeBoids = Math.min(DEFAULT_ACTIVE_BIRDS, totalBoids);
+  let birdColor = DEFAULT_PALETTE.particleColor;
   sim.setModelKind(modelKind);
   sim.setFlock2SocialConfig(flock2Social);
   sim.setFlock2FlightConfig(flock2Flight);
@@ -201,15 +219,17 @@ async function start(): Promise<void> {
     setBackgroundGradient(palette);
     const nextTheme: FlockTheme = {
       ...DEFAULT_FLOCK_THEME,
-      particleColor: palette.particleColor,
-      particleAlpha: palette.particleAlpha,
+      particleColor: birdColor,
+      particleAlpha: birdOpacity,
+      particleSize: birdSize,
+      particleShape: birdShape,
     };
     view.setTheme(nextTheme);
   };
   applyPalette(DEFAULT_PALETTE);
   const controls = createDebugControls(host, totalBoids);
   const profiler = createLoopProfiler(controls.profileStats);
-  profiler.setEnabled(profileEnabled);
+  profiler.setEnabled(menuOpen);
 
   const applyAxisBounds = (): void => {
     sim.setAxisBounce(bounceX, bounceY, bounceZ);
@@ -236,7 +256,10 @@ async function start(): Promise<void> {
   const updateDebugState = (): void => {
     controls.modelSelect.value = modelKind;
     controls.modelValueLabel.textContent = modelKindLabel(modelKind);
-    controls.controlHelp.textContent = modelLegendText(modelKind);
+    controls.controlHelp.textContent = modelLegendText(
+      modelKind,
+      controls.legendTokens,
+    );
     controls.xBoundsButton.textContent = bounceX ? "X: Bounce" : "X: Wrap";
     controls.yBoundsButton.textContent = bounceY ? "Y: Bounce" : "Y: Wrap";
     controls.zBoundsButton.textContent = bounceZ ? "Z: Bounce" : "Z: Wrap";
@@ -257,8 +280,18 @@ async function start(): Promise<void> {
     const dragNorm = rangeToNormalized(classicConfig.drag, DRAG_UI_MAX);
     controls.dragValueLabel.textContent = `g=${dragNorm.toFixed(3)} (${classicConfig.drag.toFixed(3)})`;
     controls.dragSlider.value = dragNorm.toFixed(3);
-    controls.renderValueLabel.textContent = `draw 1/${renderStride}`;
-    controls.renderSlider.value = String(renderStride);
+    controls.birdOpacityValueLabel.textContent = `op=${birdOpacity.toFixed(2)}`;
+    controls.birdOpacitySlider.value = birdOpacity.toFixed(2);
+    controls.birdSizeValueLabel.textContent = `size=${birdSize.toFixed(2)}`;
+    controls.birdSizeSlider.value = birdSize.toFixed(2);
+    controls.birdColorInput.value = rgbNumberToHex(birdColor);
+    controls.birdShapeSelect.value = birdShape;
+    controls.birdShapeValueLabel.textContent =
+      birdShape === "dot"
+        ? "shape=Dot"
+        : birdShape === "arrow"
+          ? "shape=Arrow"
+          : "shape=Chevron";
     controls.minDistanceValueLabel.textContent = `d=${classicConfig.minDistance.toFixed(3)}`;
     controls.minDistanceSlider.value = classicConfig.minDistance.toFixed(3);
     controls.hardMinDistanceValueLabel.textContent = `h=${classicConfig.hardMinDistance.toFixed(3)}`;
@@ -309,9 +342,7 @@ async function start(): Promise<void> {
     controls.f2GravitySlider.value = flock2Flight.gravity.toFixed(2);
     controls.f2AirDensityValueLabel.textContent = `rho=${flock2Flight.airDensity.toFixed(3)}`;
     controls.f2AirDensitySlider.value = flock2Flight.airDensity.toFixed(3);
-    controls.profileButton.textContent = profileEnabled
-      ? "Profile: On"
-      : "Profile: Off";
+    controls.menuButton.textContent = menuOpen ? "Menu: On" : "Menu: Off";
     const isClassic = modelKind === "classic";
     const isFlightModel =
       modelKind === "flock2-social-flight" ||
@@ -330,7 +361,11 @@ async function start(): Promise<void> {
     setButtonState(controls.zBoundsButton, bounceZ);
     setButtonState(controls.zModeButton, zEnabled);
     setButtonState(controls.mathModeButton, classicConfig.mathMode === "fast");
-    setButtonState(controls.profileButton, profileEnabled);
+    setButtonState(controls.menuButton, menuOpen);
+    setButtonState(controls.randomizeButton, false);
+    controls.menuBody.style.display = menuOpen ? "flex" : "none";
+    controls.controlHelp.style.display = menuOpen ? "block" : "none";
+    controls.profileStats.style.display = menuOpen ? "block" : "none";
   };
   updateDebugState();
 
@@ -398,8 +433,27 @@ async function start(): Promise<void> {
     updateDebugState();
   });
 
-  controls.renderSlider.addEventListener("input", () => {
-    renderStride = Number.parseInt(controls.renderSlider.value, 10);
+  controls.birdSizeSlider.addEventListener("input", () => {
+    birdSize = Number.parseFloat(controls.birdSizeSlider.value);
+    applyPalette(RANDOM_PALETTES[activePaletteIndex]);
+    updateDebugState();
+  });
+
+  controls.birdOpacitySlider.addEventListener("input", () => {
+    birdOpacity = Number.parseFloat(controls.birdOpacitySlider.value);
+    applyPalette(RANDOM_PALETTES[activePaletteIndex]);
+    updateDebugState();
+  });
+
+  controls.birdColorInput.addEventListener("input", () => {
+    birdColor = parseHexToRgbNumber(controls.birdColorInput.value);
+    applyPalette(RANDOM_PALETTES[activePaletteIndex]);
+    updateDebugState();
+  });
+
+  controls.birdShapeSelect.addEventListener("change", () => {
+    birdShape = controls.birdShapeSelect.value as BirdShape;
+    applyPalette(RANDOM_PALETTES[activePaletteIndex]);
     updateDebugState();
   });
 
@@ -562,24 +616,21 @@ async function start(): Promise<void> {
     updateDebugState();
   });
 
-  controls.profileButton.addEventListener("click", () => {
-    profileEnabled = !profileEnabled;
-    profiler.setEnabled(profileEnabled);
+  controls.menuButton.addEventListener("click", () => {
+    menuOpen = !menuOpen;
+    profiler.setEnabled(menuOpen);
     updateDebugState();
   });
 
-  controls.paletteButton.addEventListener("click", () => {
+  controls.randomizeButton.addEventListener("click", () => {
     const nextPaletteIndex = pickRandomPaletteIndex(
       activePaletteIndex,
       RANDOM_PALETTES.length,
     );
     activePaletteIndex = nextPaletteIndex;
-    const basePalette = RANDOM_PALETTES[nextPaletteIndex];
-    applyPalette({
-      ...basePalette,
-      particleColor: randomBirdColor(),
-      particleAlpha: 0.86 + Math.random() * 0.1,
-    });
+    birdColor = randomBirdColor();
+    applyPalette(RANDOM_PALETTES[nextPaletteIndex]);
+    updateDebugState();
   });
 
   const applyResize = (): void => {
@@ -651,20 +702,21 @@ async function start(): Promise<void> {
     view.render(
       positions,
       zEnabled ? sim.getDepth() : undefined,
-      renderStride,
+      1,
       activeBoids,
+      sim.getHeading(),
     );
     const renderMs = performance.now() - renderStartMs;
     const frameMs = performance.now() - frameStartMs;
 
-    if (profileEnabled) {
+    if (menuOpen) {
       profiler.record(now, {
         frameMs,
         simMs,
         renderMs,
         simSteps,
         neighborsVisited: sim.getNeighborsVisitedLastStep(),
-        renderedBoids: Math.ceil(activeBoids / renderStride),
+        renderedBoids: activeBoids,
         activeBoids,
         maxBoids: totalBoids,
       });
@@ -718,6 +770,8 @@ function createDebugControls(
   host: HTMLElement,
   maxBirds: number,
 ): {
+  menuBody: HTMLDivElement;
+  legendTokens: ControlLegendTokens;
   modelSelect: HTMLSelectElement;
   modelValueLabel: HTMLSpanElement;
   classicRows: HTMLDivElement[];
@@ -728,8 +782,13 @@ function createDebugControls(
   zBoundsButton: HTMLButtonElement;
   zModeButton: HTMLButtonElement;
   mathModeButton: HTMLButtonElement;
-  profileButton: HTMLButtonElement;
-  paletteButton: HTMLButtonElement;
+  menuButton: HTMLButtonElement;
+  randomizeButton: HTMLButtonElement;
+  birdColorInput: HTMLInputElement;
+  birdOpacitySlider: HTMLInputElement;
+  birdOpacityValueLabel: HTMLSpanElement;
+  birdShapeSelect: HTMLSelectElement;
+  birdShapeValueLabel: HTMLSpanElement;
   kSlider: HTMLInputElement;
   kValueLabel: HTMLSpanElement;
   birdCountSlider: HTMLInputElement;
@@ -738,8 +797,8 @@ function createDebugControls(
   maxForceValueLabel: HTMLSpanElement;
   dragSlider: HTMLInputElement;
   dragValueLabel: HTMLSpanElement;
-  renderSlider: HTMLInputElement;
-  renderValueLabel: HTMLSpanElement;
+  birdSizeSlider: HTMLInputElement;
+  birdSizeValueLabel: HTMLSpanElement;
   minDistanceSlider: HTMLInputElement;
   minDistanceValueLabel: HTMLSpanElement;
   hardMinDistanceSlider: HTMLInputElement;
@@ -800,10 +859,35 @@ function createDebugControls(
   panel.style.maxWidth = "calc(100vw - 16px)";
   panel.style.pointerEvents = "auto";
 
-  const buttonRow = document.createElement("div");
-  buttonRow.style.display = "flex";
-  buttonRow.style.gap = "4px";
-  buttonRow.style.flexWrap = "wrap";
+  const menuRow = document.createElement("div");
+  menuRow.style.display = "flex";
+  menuRow.style.gap = "4px";
+  menuRow.style.flexWrap = "wrap";
+
+  const menuBody = document.createElement("div");
+  menuBody.style.display = "flex";
+  menuBody.style.flexDirection = "column";
+  menuBody.style.gap = "4px";
+
+  const createSection = (label: string): HTMLDivElement => {
+    const section = document.createElement("div");
+    section.style.display = "flex";
+    section.style.flexDirection = "column";
+    section.style.gap = "3px";
+    section.style.padding = "4px";
+    section.style.border = "1px solid rgba(187, 208, 234, 0.25)";
+    section.style.borderRadius = "4px";
+    section.style.background = "rgba(2, 5, 10, 0.5)";
+
+    const title = document.createElement("div");
+    title.textContent = label;
+    title.style.color = "#d7e9ff";
+    title.style.font =
+      '600 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+    title.style.textTransform = "uppercase";
+    section.appendChild(title);
+    return section;
+  };
 
   const modelRow = document.createElement("div");
   modelRow.style.display = "flex";
@@ -871,10 +955,10 @@ function createDebugControls(
   );
   mathModeButton.title =
     "Math path for vector ops: Accurate favors precision, Fast favors speed.";
-  const profileButton = createDebugButton("Profile: On");
-  profileButton.title = "Toggle runtime performance metrics overlay.";
-  const paletteButton = createDebugButton("Palette: Random");
-  paletteButton.title = "Randomize bird tint and background gradient.";
+  const menuButton = createDebugButton("Menu: On");
+  menuButton.title = "Show or hide the simulation controls menu.";
+  const randomizeButton = createDebugButton("Randomize");
+  randomizeButton.title = "Randomize palette background and bird color.";
   const defaultActiveBirds = Math.min(maxBirds, DEFAULT_ACTIVE_BIRDS);
   const kSlider = document.createElement("input");
   kSlider.type = "range";
@@ -965,27 +1049,92 @@ function createDebugControls(
   dragValueLabel.style.font =
     '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
 
-  const renderSlider = document.createElement("input");
-  renderSlider.type = "range";
-  renderSlider.min = "1";
-  renderSlider.max = "8";
-  renderSlider.step = "1";
-  renderSlider.value = "1";
-  renderSlider.style.width = "90px";
-  renderSlider.style.height = "20px";
-  renderSlider.style.margin = "0";
-  renderSlider.style.cursor = "pointer";
-  renderSlider.title =
-    "draw: render stride; 1 draws all boids, higher values draw fewer.";
+  const birdSizeSlider = document.createElement("input");
+  birdSizeSlider.type = "range";
+  birdSizeSlider.min = "0.50";
+  birdSizeSlider.max = "8.00";
+  birdSizeSlider.step = "0.05";
+  birdSizeSlider.value = DEFAULT_BIRD_SIZE.toFixed(2);
+  birdSizeSlider.style.width = "90px";
+  birdSizeSlider.style.height = "20px";
+  birdSizeSlider.style.margin = "0";
+  birdSizeSlider.style.cursor = "pointer";
+  birdSizeSlider.title = "size: rendered bird size in pixels.";
 
-  const renderValueLabel = document.createElement("span");
-  renderValueLabel.textContent = "draw 1/1";
-  renderValueLabel.style.display = "inline-flex";
-  renderValueLabel.style.alignItems = "center";
-  renderValueLabel.style.height = "20px";
-  renderValueLabel.style.padding = "0 4px";
-  renderValueLabel.style.color = "#e6f0ff";
-  renderValueLabel.style.font =
+  const birdSizeValueLabel = document.createElement("span");
+  birdSizeValueLabel.textContent = `size=${DEFAULT_BIRD_SIZE.toFixed(2)}`;
+  birdSizeValueLabel.style.display = "inline-flex";
+  birdSizeValueLabel.style.alignItems = "center";
+  birdSizeValueLabel.style.height = "20px";
+  birdSizeValueLabel.style.padding = "0 4px";
+  birdSizeValueLabel.style.color = "#e6f0ff";
+  birdSizeValueLabel.style.font =
+    '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
+  const birdOpacitySlider = document.createElement("input");
+  birdOpacitySlider.type = "range";
+  birdOpacitySlider.min = "0.05";
+  birdOpacitySlider.max = "1.00";
+  birdOpacitySlider.step = "0.01";
+  birdOpacitySlider.value = DEFAULT_BIRD_OPACITY.toFixed(2);
+  birdOpacitySlider.style.width = "90px";
+  birdOpacitySlider.style.height = "20px";
+  birdOpacitySlider.style.margin = "0";
+  birdOpacitySlider.style.cursor = "pointer";
+  birdOpacitySlider.title = "op: bird opacity.";
+
+  const birdOpacityValueLabel = document.createElement("span");
+  birdOpacityValueLabel.textContent = `op=${DEFAULT_BIRD_OPACITY.toFixed(2)}`;
+  birdOpacityValueLabel.style.display = "inline-flex";
+  birdOpacityValueLabel.style.alignItems = "center";
+  birdOpacityValueLabel.style.height = "20px";
+  birdOpacityValueLabel.style.padding = "0 4px";
+  birdOpacityValueLabel.style.color = "#e6f0ff";
+  birdOpacityValueLabel.style.font =
+    '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
+  const birdColorInput = document.createElement("input");
+  birdColorInput.type = "color";
+  birdColorInput.value = rgbNumberToHex(DEFAULT_PALETTE.particleColor);
+  birdColorInput.style.width = "90px";
+  birdColorInput.style.height = "20px";
+  birdColorInput.style.padding = "0";
+  birdColorInput.style.border = "1px solid rgba(187, 208, 234, 0.65)";
+  birdColorInput.style.borderRadius = "4px";
+  birdColorInput.style.background = "rgba(6, 10, 18, 0.9)";
+  birdColorInput.style.cursor = "pointer";
+  birdColorInput.title = "Bird color.";
+
+  const birdShapeSelect = document.createElement("select");
+  birdShapeSelect.style.height = "20px";
+  birdShapeSelect.style.border = "1px solid rgba(187, 208, 234, 0.65)";
+  birdShapeSelect.style.borderRadius = "4px";
+  birdShapeSelect.style.background = "rgba(6, 10, 18, 0.9)";
+  birdShapeSelect.style.color = "#e6f0ff";
+  birdShapeSelect.style.font =
+    '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+  birdShapeSelect.style.padding = "0 6px";
+  birdShapeSelect.style.cursor = "pointer";
+  birdShapeSelect.title = "Bird sprite shape.";
+  [
+    { value: "dot", label: "Dot" },
+    { value: "arrow", label: "Arrow" },
+    { value: "chevron", label: "Chevron" },
+  ].forEach((option) => {
+    const node = document.createElement("option");
+    node.value = option.value;
+    node.textContent = option.label;
+    birdShapeSelect.appendChild(node);
+  });
+
+  const birdShapeValueLabel = document.createElement("span");
+  birdShapeValueLabel.textContent = "shape=Dot";
+  birdShapeValueLabel.style.display = "inline-flex";
+  birdShapeValueLabel.style.alignItems = "center";
+  birdShapeValueLabel.style.height = "20px";
+  birdShapeValueLabel.style.padding = "0 4px";
+  birdShapeValueLabel.style.color = "#e6f0ff";
+  birdShapeValueLabel.style.font =
     '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
 
   const minDistanceSlider = document.createElement("input");
@@ -1079,8 +1228,9 @@ function createDebugControls(
   controlHelp.style.color = "#c3d9f7";
   controlHelp.style.font =
     '500 9px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
-  controlHelp.style.whiteSpace = "pre";
-  controlHelp.textContent = modelLegendText(DEFAULT_MODEL_KIND);
+  controlHelp.style.whiteSpace = "pre-wrap";
+  controlHelp.style.overflowWrap = "anywhere";
+  controlHelp.textContent = "";
 
   const buttons = [
     xBoundsButton,
@@ -1088,8 +1238,8 @@ function createDebugControls(
     zBoundsButton,
     zModeButton,
     mathModeButton,
-    profileButton,
-    paletteButton,
+    menuButton,
+    randomizeButton,
   ];
   for (const button of buttons) {
     button.style.height = "20px";
@@ -1103,13 +1253,10 @@ function createDebugControls(
     button.style.cursor = "pointer";
     button.style.backdropFilter = "blur(1px)";
   }
-
-  for (const button of buttons) {
-    buttonRow.appendChild(button);
-  }
+  menuRow.appendChild(menuButton);
 
   const createSliderRow = (
-    slider: HTMLInputElement,
+    slider: HTMLElement,
     valueLabel: HTMLSpanElement,
   ): HTMLDivElement => {
     const row = document.createElement("div");
@@ -1315,7 +1462,27 @@ function createDebugControls(
   const birdCountRow = createSliderRow(birdCountSlider, birdCountValueLabel);
   const maxForceRow = createSliderRow(maxForceSlider, maxForceValueLabel);
   const dragRow = createSliderRow(dragSlider, dragValueLabel);
-  const renderRow = createSliderRow(renderSlider, renderValueLabel);
+  const birdOpacityRow = createSliderRow(
+    birdOpacitySlider,
+    birdOpacityValueLabel,
+  );
+  const birdSizeRow = createSliderRow(birdSizeSlider, birdSizeValueLabel);
+  const birdShapeRow = createSliderRow(birdShapeSelect, birdShapeValueLabel);
+  const birdColorLabel = document.createElement("span");
+  birdColorLabel.textContent = "color";
+  birdColorLabel.style.display = "inline-flex";
+  birdColorLabel.style.alignItems = "center";
+  birdColorLabel.style.height = "20px";
+  birdColorLabel.style.padding = "0 4px";
+  birdColorLabel.style.color = "#e6f0ff";
+  birdColorLabel.style.font =
+    '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+  const birdColorRow = createSliderRow(birdColorInput, birdColorLabel);
+  const randomizeRow = document.createElement("div");
+  randomizeRow.style.display = "flex";
+  randomizeRow.style.alignItems = "center";
+  randomizeRow.style.gap = "4px";
+  randomizeRow.append(randomizeButton);
   const minDistanceRow = createSliderRow(
     minDistanceSlider,
     minDistanceValueLabel,
@@ -1325,6 +1492,48 @@ function createDebugControls(
     hardMinDistanceValueLabel,
   );
   const jitterRow = createSliderRow(jitterSlider, jitterValueLabel);
+  const legendTokens: ControlLegendTokens = {
+    simCore: ["model", "math", legendTokenFromLabel(birdCountValueLabel.textContent)],
+    classic: [
+      legendTokenFromLabel(kValueLabel.textContent),
+      legendTokenFromLabel(maxForceValueLabel.textContent),
+      legendTokenFromLabel(dragValueLabel.textContent),
+      legendTokenFromLabel(minDistanceValueLabel.textContent),
+      legendTokenFromLabel(hardMinDistanceValueLabel.textContent),
+      legendTokenFromLabel(jitterValueLabel.textContent),
+    ].filter((token) => token.length > 0),
+    social: [
+      legendTokenFromLabel(f2NeighborRadius.valueLabel.textContent),
+      legendTokenFromLabel(f2Topological.valueLabel.textContent),
+      legendTokenFromLabel(f2Fov.valueLabel.textContent),
+      legendTokenFromLabel(f2Avoid.valueLabel.textContent),
+      legendTokenFromLabel(f2Align.valueLabel.textContent),
+      legendTokenFromLabel(f2Cohesion.valueLabel.textContent),
+      legendTokenFromLabel(f2BoundaryWeight.valueLabel.textContent),
+      legendTokenFromLabel(f2BoundaryCount.valueLabel.textContent),
+    ].filter((token) => token.length > 0),
+    flight: [
+      legendTokenFromLabel(f2Reaction.valueLabel.textContent),
+      legendTokenFromLabel(f2Stability.valueLabel.textContent),
+      legendTokenFromLabel(f2Mass.valueLabel.textContent),
+      legendTokenFromLabel(f2WingArea.valueLabel.textContent),
+      legendTokenFromLabel(f2Lift.valueLabel.textContent),
+      legendTokenFromLabel(f2AeroDrag.valueLabel.textContent),
+      legendTokenFromLabel(f2Thrust.valueLabel.textContent),
+      legendTokenFromLabel(f2MinSpeed.valueLabel.textContent),
+      legendTokenFromLabel(f2MaxSpeed.valueLabel.textContent),
+      legendTokenFromLabel(f2Gravity.valueLabel.textContent),
+      legendTokenFromLabel(f2AirDensity.valueLabel.textContent),
+    ].filter((token) => token.length > 0),
+    cosmetics: [
+      legendTokenFromLabel(birdColorLabel.textContent),
+      legendTokenFromLabel(birdOpacityValueLabel.textContent),
+      legendTokenFromLabel(birdSizeValueLabel.textContent),
+      legendTokenFromLabel(birdShapeValueLabel.textContent),
+      "randomize",
+    ].filter((token) => token.length > 0),
+  };
+  controlHelp.textContent = modelLegendText(DEFAULT_MODEL_KIND, legendTokens);
 
   classicRows.push(
     kRow,
@@ -1363,7 +1572,6 @@ function createDebugControls(
     birdCountRow,
     maxForceRow,
     dragRow,
-    renderRow,
     minDistanceRow,
     hardMinDistanceRow,
     jitterRow,
@@ -1388,10 +1596,38 @@ function createDebugControls(
     f2AirDensity.row,
   );
 
-  panel.append(modelRow, buttonRow, sliderStack, controlHelp, profileStats);
+  const windowSection = createSection("Window");
+  const windowButtonsRow = document.createElement("div");
+  windowButtonsRow.style.display = "flex";
+  windowButtonsRow.style.gap = "4px";
+  windowButtonsRow.style.flexWrap = "wrap";
+  windowButtonsRow.append(xBoundsButton, yBoundsButton, zBoundsButton, zModeButton);
+  windowSection.append(windowButtonsRow);
+
+  const simSection = createSection("Sim");
+  const simButtonsRow = document.createElement("div");
+  simButtonsRow.style.display = "flex";
+  simButtonsRow.style.gap = "4px";
+  simButtonsRow.style.flexWrap = "wrap";
+  simButtonsRow.append(mathModeButton);
+  simSection.append(modelRow, simButtonsRow, sliderStack);
+
+  const cosmeticsSection = createSection("Cosmetics");
+  cosmeticsSection.append(
+    birdColorRow,
+    birdOpacityRow,
+    birdSizeRow,
+    birdShapeRow,
+    randomizeRow,
+  );
+
+  menuBody.append(windowSection, simSection, cosmeticsSection, controlHelp, profileStats);
+  panel.append(menuRow, menuBody);
   host.appendChild(panel);
 
   return {
+    menuBody,
+    legendTokens,
     modelSelect,
     modelValueLabel,
     classicRows,
@@ -1402,8 +1638,13 @@ function createDebugControls(
     zBoundsButton,
     zModeButton,
     mathModeButton,
-    profileButton,
-    paletteButton,
+    menuButton,
+    randomizeButton,
+    birdColorInput,
+    birdOpacitySlider,
+    birdOpacityValueLabel,
+    birdShapeSelect,
+    birdShapeValueLabel,
     kSlider,
     kValueLabel,
     birdCountSlider,
@@ -1412,8 +1653,8 @@ function createDebugControls(
     maxForceValueLabel,
     dragSlider,
     dragValueLabel,
-    renderSlider,
-    renderValueLabel,
+    birdSizeSlider,
+    birdSizeValueLabel,
     minDistanceSlider,
     minDistanceValueLabel,
     hardMinDistanceSlider,
@@ -1478,39 +1719,91 @@ function modelKindLabel(modelKind: SimModelKind): string {
   }
 }
 
-function modelLegendText(modelKind: SimModelKind): string {
+function modelLegendText(
+  modelKind: SimModelKind,
+  legendTokens: ControlLegendTokens,
+): string {
+  const formatLegendItems = (
+    tokens: string[],
+    descriptions: Record<string, string>,
+  ): string[] =>
+    tokens.map((token) => {
+      const description = descriptions[token];
+      return description ? `${token}=${description}` : token;
+    });
+  const buildLegendBlock = (
+    title: string,
+    items: string[],
+  ): string[] => [title, ...items.map((item) => `  ${item}`)];
+
+  const simDescriptions: Record<string, string> = {
+    model: "sim model",
+    math: "precision/speed",
+    n: "bird count",
+  };
+  const cosmeticsDescriptions: Record<string, string> = {
+    color: "tint",
+    op: "opacity",
+    size: "bird size",
+    shape: "sprite",
+    randomize: "new palette+color",
+  };
+  const classicDescriptions: Record<string, string> = {
+    k: "neighbor cap",
+    f: "max steer",
+    g: "drag damping",
+    d: "soft min dist",
+    h: "hard min dist",
+    j: "jitter",
+  };
+  const socialDescriptions: Record<string, string> = {
+    r: "neighbor radius",
+    k: "neighbor count",
+    fov: "view angle",
+    av: "avoid weight",
+    al: "align weight",
+    co: "cohesion weight",
+    bw: "boundary weight",
+    bc: "boundary crowd",
+  };
+  const flightDescriptions: Record<string, string> = {
+    rt: "reaction ms",
+    ds: "stability",
+    m: "mass",
+    A: "wing area",
+    cl: "lift",
+    cd: "drag",
+    th: "thrust",
+    vmin: "min speed",
+    vmax: "max speed",
+    g: "gravity",
+    rho: "air density",
+  };
+
   const baseLines = [
-    "X/Y/Z: axis boundary mode (Wrap or Bounce)",
-    "Z Mode: enable depth simulation",
-    "Math: vector math mode (Accurate/Fast)",
-    "Palette: randomize bird and background colors",
-    "n: active bird count",
-    "draw: render stride (1 = draw all boids)",
-  ];
-  const classicLines = [
-    "Model: Flockround Classic",
-    "k: neighbors sampled per boid (inf = uncapped)",
-    "f: max steering force clamp",
-    "g: normalized drag (0..1 -> 0..6 1/s)",
-    "d: soft minimum separation distance",
-    "h: hard post-step minimum distance floor",
-    "j: random steering jitter",
-  ];
-  const socialLines = [
     `Model: ${modelKindLabel(modelKind)}`,
-    "r: metric neighbor radius",
-    "k: topological neighbor count",
-    "fov: field of view in degrees",
-    "av/al/co: avoid/align/cohesion weights",
-    "bw/bc: boundary weight and crowding term",
+    "Window: X/Y/Z=wrap or bounce | zmode=depth motion",
+    ...buildLegendBlock(
+      "Sim:",
+      formatLegendItems(legendTokens.simCore, simDescriptions),
+    ),
+    ...buildLegendBlock(
+      "Cosmetics:",
+      formatLegendItems(legendTokens.cosmetics, cosmeticsDescriptions),
+    ),
   ];
-  const flightLines = [
-    "rt: reaction time (ms), ds: stability",
-    "m/A: mass and wing area",
-    "cl/cd/th: lift, drag, thrust factors",
-    "vmin/vmax: speed clamp",
-    "g/rho: gravity and air density",
-  ];
+  const classicLines = buildLegendBlock(
+    "Classic sliders:",
+    formatLegendItems(legendTokens.classic, classicDescriptions),
+  );
+  const socialLines = buildLegendBlock(
+    "Social sliders:",
+    formatLegendItems(legendTokens.social, socialDescriptions),
+  );
+  const flightLines = buildLegendBlock(
+    "Flight sliders:",
+    formatLegendItems(legendTokens.flight, flightDescriptions),
+  );
 
   if (modelKind === "classic") {
     return [...classicLines, ...baseLines].join("\n");
@@ -1519,6 +1812,21 @@ function modelLegendText(modelKind: SimModelKind): string {
     return [...socialLines, ...baseLines].join("\n");
   }
   return [...socialLines, ...flightLines, ...baseLines].join("\n");
+}
+
+function legendTokenFromLabel(labelText: string | null): string {
+  if (!labelText) {
+    return "";
+  }
+  const trimmed = labelText.trim();
+  if (trimmed.length === 0) {
+    return "";
+  }
+  const equalsIndex = trimmed.indexOf("=");
+  if (equalsIndex > 0) {
+    return trimmed.slice(0, equalsIndex).trim();
+  }
+  return trimmed.toLowerCase();
 }
 
 function createDebugButton(label: string): HTMLButtonElement {
@@ -1564,6 +1872,19 @@ function randomBirdColor(): number {
   const saturation = 0.35 + Math.random() * 0.55;
   const lightness = 0.72 + Math.random() * 0.2;
   return hslToRgbNumber(hue, saturation, lightness);
+}
+
+function rgbNumberToHex(color: number): string {
+  const clamped = Math.max(0, Math.min(0xffffff, Math.floor(color)));
+  return `#${clamped.toString(16).padStart(6, "0")}`;
+}
+
+function parseHexToRgbNumber(hex: string): number {
+  const normalized = hex.trim().replace(/^#/, "");
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) {
+    return DEFAULT_PALETTE.particleColor;
+  }
+  return Number.parseInt(normalized, 16);
 }
 
 function hslToRgbNumber(

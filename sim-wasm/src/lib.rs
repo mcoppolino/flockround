@@ -219,6 +219,7 @@ pub struct Sim {
     accel_z: Vec<f32>,
     render_xy: Vec<f32>,
     render_z: Vec<f32>,
+    render_heading_xy: Vec<f32>,
     neighbor_grid: NeighborGrid,
     neighbors_visited_last_step: usize,
     step_index: u32,
@@ -245,6 +246,7 @@ impl Sim {
         let mut heading_z = vec![0.0; count];
         let mut render_xy = vec![0.0; count * 2];
         let mut render_z = vec![DEFAULT_Z_LAYER; count];
+        let mut render_heading_xy = vec![0.0; count * 2];
 
         for i in 0..count {
             pos_x[i] = rng.next_f32();
@@ -265,6 +267,8 @@ impl Sim {
             render_xy[base] = pos_x[i];
             render_xy[base + 1] = pos_y[i];
             render_z[i] = DEFAULT_Z_LAYER;
+            render_heading_xy[base] = heading_x[i];
+            render_heading_xy[base + 1] = heading_y[i];
         }
 
         Sim {
@@ -294,6 +298,7 @@ impl Sim {
             accel_z: vec![0.0; count],
             render_xy,
             render_z,
+            render_heading_xy,
             neighbor_grid: NeighborGrid::new(count, WORLD_SIZE, WORLD_SIZE, config.neighbor_radius),
             neighbors_visited_last_step: 0,
             step_index: 0,
@@ -621,6 +626,14 @@ impl Sim {
     pub fn render_z_len(&self) -> usize {
         self.render_z.len()
     }
+
+    pub fn render_heading_xy_ptr(&self) -> *const f32 {
+        self.render_heading_xy.as_ptr()
+    }
+
+    pub fn render_heading_xy_len(&self) -> usize {
+        self.render_heading_xy.len()
+    }
 }
 
 impl Sim {
@@ -727,6 +740,28 @@ impl Sim {
             self.render_xy[base] = self.pos_x[i];
             self.render_xy[base + 1] = self.pos_y[i];
             self.render_z[i] = self.pos_z[i];
+            let vx = self.vel_x[i];
+            let vy = self.vel_y[i];
+            let vel_len_sq = vx * vx + vy * vy;
+            if vel_len_sq > EPSILON {
+                let inv_len = vel_len_sq.sqrt().recip();
+                self.render_heading_xy[base] = vx * inv_len;
+                self.render_heading_xy[base + 1] = vy * inv_len;
+                continue;
+            }
+
+            let hx = self.heading_x[i];
+            let hy = self.heading_y[i];
+            let heading_len_sq = hx * hx + hy * hy;
+            if heading_len_sq > EPSILON {
+                let inv_len = heading_len_sq.sqrt().recip();
+                self.render_heading_xy[base] = hx * inv_len;
+                self.render_heading_xy[base + 1] = hy * inv_len;
+                continue;
+            }
+
+            self.render_heading_xy[base] = 1.0;
+            self.render_heading_xy[base + 1] = 0.0;
         }
     }
 

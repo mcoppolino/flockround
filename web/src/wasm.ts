@@ -78,11 +78,14 @@ export class WasmSimClient {
   private readonly wasmMemory: WebAssembly.Memory;
   private positionsView: Float32Array;
   private depthView: Float32Array;
+  private headingView: Float32Array;
   private memoryBuffer: ArrayBuffer;
   private readonly positionsPointer: number;
   private readonly positionsLength: number;
   private readonly depthPointer: number;
   private readonly depthLength: number;
+  private readonly headingPointer: number;
+  private readonly headingLength: number;
 
   constructor(
     count: number,
@@ -97,6 +100,8 @@ export class WasmSimClient {
     this.positionsLength = this.sim.render_xy_len();
     this.depthPointer = this.sim.render_z_ptr();
     this.depthLength = this.sim.render_z_len();
+    this.headingPointer = this.sim.render_heading_xy_ptr();
+    this.headingLength = this.sim.render_heading_xy_len();
     this.memoryBuffer = wasmMemory.buffer;
     this.positionsView = new Float32Array(
       this.memoryBuffer,
@@ -107,6 +112,11 @@ export class WasmSimClient {
       this.memoryBuffer,
       this.depthPointer,
       this.depthLength,
+    );
+    this.headingView = new Float32Array(
+      this.memoryBuffer,
+      this.headingPointer,
+      this.headingLength,
     );
   }
 
@@ -343,12 +353,21 @@ export class WasmSimClient {
     return this.depthView;
   }
 
+  getHeading(): Float32Array {
+    this.refreshViewIfMemoryChanged();
+    return this.headingView;
+  }
+
   getPointer(): number {
     return this.positionsPointer;
   }
 
   getDepthPointer(): number {
     return this.depthPointer;
+  }
+
+  getHeadingPointer(): number {
+    return this.headingPointer;
   }
 
   private refreshViewIfMemoryChanged(): void {
@@ -367,6 +386,11 @@ export class WasmSimClient {
       this.depthPointer,
       this.depthLength,
     );
+    this.headingView = new Float32Array(
+      this.memoryBuffer,
+      this.headingPointer,
+      this.headingLength,
+    );
   }
 }
 
@@ -381,6 +405,7 @@ export async function initWasmModule(): Promise<WasmSimClient> {
     seed,
     ptr: sim.getPointer(),
     depthPtr: sim.getDepthPointer(),
+    headingPtr: sim.getHeadingPointer(),
   });
 
   return sim;

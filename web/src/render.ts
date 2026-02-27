@@ -1,6 +1,8 @@
 import { Application, MeshSimple, Texture } from "pixi.js";
 import type { BLEND_MODES } from "pixi.js";
 
+export type BirdShape = "dot" | "arrow" | "chevron";
+
 export interface FlockTheme {
   backgroundColor: number;
   backgroundAlpha: number;
@@ -8,6 +10,7 @@ export interface FlockTheme {
   particleAlpha: number;
   blendMode: BLEND_MODES;
   particleSize: number;
+  particleShape: BirdShape;
 }
 
 export interface FlockViewOptions {
@@ -25,6 +28,7 @@ export const DEFAULT_FLOCK_THEME: FlockTheme = {
   particleAlpha: 0.92,
   blendMode: "normal",
   particleSize: 2.4,
+  particleShape: "dot",
 };
 
 export class FlockView {
@@ -32,7 +36,7 @@ export class FlockView {
   private readonly app: Application;
   private readonly dprCap: number;
   private readonly renderScale: number;
-  private readonly particleTexture: Texture;
+  private readonly particleTextures: Record<BirdShape, Texture>;
 
   private theme: FlockTheme;
   private mesh: MeshSimple | null = null;
@@ -45,12 +49,12 @@ export class FlockView {
   private constructor(
     host: HTMLElement,
     app: Application,
-    particleTexture: Texture,
+    particleTextures: Record<BirdShape, Texture>,
     options?: FlockViewOptions,
   ) {
     this.host = host;
     this.app = app;
-    this.particleTexture = particleTexture;
+    this.particleTextures = particleTextures;
     this.dprCap = options?.dprCap ?? 2;
     this.renderScale = options?.renderScale ?? 1;
     this.theme = DEFAULT_FLOCK_THEME;
@@ -64,7 +68,11 @@ export class FlockView {
     const renderer = new FlockView(
       host,
       app,
-      FlockView.createParticleTexture(),
+      {
+        dot: FlockView.createParticleTexture("dot"),
+        arrow: FlockView.createParticleTexture("arrow"),
+        chevron: FlockView.createParticleTexture("chevron"),
+      },
       options,
     );
     await renderer.init();
@@ -84,6 +92,7 @@ export class FlockView {
     this.mesh.tint = theme.particleColor;
     this.mesh.alpha = theme.particleAlpha;
     this.mesh.blendMode = theme.blendMode;
+    this.mesh.texture = this.particleTextures[theme.particleShape];
     this.app.render();
   }
 
@@ -92,6 +101,7 @@ export class FlockView {
     depth?: Float32Array,
     sampleStride = 1,
     maxCount?: number,
+    heading?: Float32Array,
   ): void {
     const availableCount = positions.length >>> 1;
     const totalCount =
@@ -112,6 +122,10 @@ export class FlockView {
     const width = this.app.screen.width * this.renderScale;
     const height = this.app.screen.height * this.renderScale;
     const hasDepth = Boolean(depth) && (depth?.length ?? 0) >= totalCount;
+    const hasHeading =
+      this.theme.particleShape !== "dot" &&
+      Boolean(heading) &&
+      (heading?.length ?? 0) >= totalCount * 2;
     const baseHalfSize = this.theme.particleSize * 0.5;
 
     let renderIndex = 0;
@@ -122,6 +136,32 @@ export class FlockView {
       const v = renderIndex * 8;
       const z = hasDepth ? clamp01(depth![sourceIndex]) : DEFAULT_Z_LAYER;
       const halfSize = baseHalfSize * (0.55 + 0.9 * z);
+
+      if (hasHeading) {
+        const h = sourceIndex * 2;
+        const headingX = heading![h];
+        const headingY = heading![h + 1];
+        const headingLengthSq = headingX * headingX + headingY * headingY;
+
+        if (Number.isFinite(headingLengthSq) && headingLengthSq > 1.0e-8) {
+          const invHeadingLength = 1 / Math.sqrt(headingLengthSq);
+          const upX = headingX * invHeadingLength;
+          const upY = headingY * invHeadingLength;
+          const rightX = -upY;
+          const rightY = upX;
+
+          this.vertices[v] = x - halfSize * rightX + halfSize * upX;
+          this.vertices[v + 1] = y - halfSize * rightY + halfSize * upY;
+          this.vertices[v + 2] = x + halfSize * rightX + halfSize * upX;
+          this.vertices[v + 3] = y + halfSize * rightY + halfSize * upY;
+          this.vertices[v + 4] = x + halfSize * rightX - halfSize * upX;
+          this.vertices[v + 5] = y + halfSize * rightY - halfSize * upY;
+          this.vertices[v + 6] = x - halfSize * rightX - halfSize * upX;
+          this.vertices[v + 7] = y - halfSize * rightY - halfSize * upY;
+          renderIndex += 1;
+          continue;
+        }
+      }
 
       this.vertices[v] = x - halfSize;
       this.vertices[v + 1] = y - halfSize;
@@ -206,7 +246,7 @@ export class FlockView {
     }
 
     this.mesh = new MeshSimple({
-      texture: this.particleTexture,
+      texture: this.particleTextures[this.theme.particleShape],
       vertices: this.vertices,
       uvs,
       indices,
@@ -217,7 +257,7 @@ export class FlockView {
     this.app.stage.addChild(this.mesh);
   }
 
-  private static createParticleTexture(): Texture {
+  private static createParticleTexture(shape: BirdShape): Texture {
     const canvas = document.createElement("canvas");
     canvas.width = 32;
     canvas.height = 32;
@@ -228,13 +268,41 @@ export class FlockView {
     }
 
     ctx.clearRect(0, 0, 32, 32);
-    const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
-    gradient.addColorStop(0, "rgba(255,255,255,1)");
-    gradient.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = gradient;
+    if (shape === "dot") {
+      const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+      gradient.addColorStop(0, "rgba(255,255,255,1)");
+      gradient.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(16, 16, 16, 0, Math.PI * 2);
+      ctx.fill();
+      return Texture.from(canvas);
+    }
+
+    ctx.fillStyle = "rgba(255,255,255,1)";
+    ctx.strokeStyle = "rgba(255,255,255,1)";
+    if (shape === "arrow") {
+      ctx.beginPath();
+      ctx.moveTo(16, 3);
+      ctx.lineTo(29, 16);
+      ctx.lineTo(22, 16);
+      ctx.lineTo(22, 29);
+      ctx.lineTo(10, 29);
+      ctx.lineTo(10, 16);
+      ctx.lineTo(3, 16);
+      ctx.closePath();
+      ctx.fill();
+      return Texture.from(canvas);
+    }
+
+    ctx.lineWidth = 5;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
     ctx.beginPath();
-    ctx.arc(16, 16, 16, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.moveTo(6, 21);
+    ctx.lineTo(16, 8);
+    ctx.lineTo(26, 21);
+    ctx.stroke();
 
     return Texture.from(canvas);
   }
