@@ -20,9 +20,16 @@ const MIN_SPEED: f32 = 0.0;
 const MAX_SPEED: f32 = 3.0;
 const MIN_MAX_FORCE: f32 = 0.0;
 const MAX_MAX_FORCE: f32 = 5.0;
+const DEFAULT_MAX_FORCE: f32 = 0.42;
 const MIN_Z_FORCE_SCALE: f32 = 0.0;
 const MAX_Z_FORCE_SCALE: f32 = 2.0;
 const DEFAULT_Z_FORCE_SCALE: f32 = 0.75;
+const MIN_MIN_DISTANCE: f32 = 0.0;
+const MAX_MIN_DISTANCE: f32 = 0.3;
+const DEFAULT_MIN_DISTANCE: f32 = 0.008;
+const MIN_JITTER_STRENGTH: f32 = 0.0;
+const MAX_JITTER_STRENGTH: f32 = 0.5;
+const DEFAULT_JITTER_STRENGTH: f32 = 0.01;
 
 #[derive(Clone, Copy)]
 struct Lcg32 {
@@ -60,6 +67,8 @@ struct SimConfig {
     max_force: f32,
     math_mode: MathMode,
     max_neighbors_sampled: usize,
+    min_distance: f32,
+    jitter_strength: f32,
 }
 
 impl Default for SimConfig {
@@ -72,9 +81,11 @@ impl Default for SimConfig {
             separation_radius: 0.035,
             min_speed: 0.045,
             max_speed: 0.19,
-            max_force: 0.42,
+            max_force: DEFAULT_MAX_FORCE,
             math_mode: MathMode::Accurate,
             max_neighbors_sampled: 0,
+            min_distance: DEFAULT_MIN_DISTANCE,
+            jitter_strength: DEFAULT_JITTER_STRENGTH,
         }
     }
 }
@@ -107,7 +118,24 @@ impl SimConfig {
             0.19,
         );
 
-        self.max_force = clamp_finite(self.max_force, MIN_MAX_FORCE, MAX_MAX_FORCE, 0.42);
+        self.max_force = clamp_finite(
+            self.max_force,
+            MIN_MAX_FORCE,
+            MAX_MAX_FORCE,
+            DEFAULT_MAX_FORCE,
+        );
+        self.min_distance = clamp_finite(
+            self.min_distance,
+            MIN_MIN_DISTANCE,
+            MAX_MIN_DISTANCE,
+            DEFAULT_MIN_DISTANCE,
+        );
+        self.jitter_strength = clamp_finite(
+            self.jitter_strength,
+            MIN_JITTER_STRENGTH,
+            MAX_JITTER_STRENGTH,
+            DEFAULT_JITTER_STRENGTH,
+        );
     }
 }
 
@@ -135,6 +163,7 @@ pub struct Sim {
     render_z: Vec<f32>,
     neighbor_grid: NeighborGrid,
     neighbors_visited_last_step: usize,
+    step_index: u32,
 }
 
 #[wasm_bindgen]
@@ -195,6 +224,7 @@ impl Sim {
             render_z,
             neighbor_grid: NeighborGrid::new(count, WORLD_SIZE, WORLD_SIZE, config.neighbor_radius),
             neighbors_visited_last_step: 0,
+            step_index: 0,
         }
     }
 
@@ -221,6 +251,8 @@ impl Sim {
             max_force,
             math_mode: self.config.math_mode,
             max_neighbors_sampled: self.config.max_neighbors_sampled,
+            min_distance: self.config.min_distance,
+            jitter_strength: self.config.jitter_strength,
         };
         self.config.sanitize();
 
@@ -307,6 +339,45 @@ impl Sim {
         self.neighbors_visited_last_step
     }
 
+    pub fn set_max_force(&mut self, max_force: f32) {
+        self.config.max_force = clamp_finite(
+            max_force,
+            MIN_MAX_FORCE,
+            MAX_MAX_FORCE,
+            DEFAULT_MAX_FORCE,
+        );
+    }
+
+    pub fn max_force(&self) -> f32 {
+        self.config.max_force
+    }
+
+    pub fn set_min_distance(&mut self, min_distance: f32) {
+        self.config.min_distance = clamp_finite(
+            min_distance,
+            MIN_MIN_DISTANCE,
+            MAX_MIN_DISTANCE,
+            DEFAULT_MIN_DISTANCE,
+        );
+    }
+
+    pub fn min_distance(&self) -> f32 {
+        self.config.min_distance
+    }
+
+    pub fn set_jitter_strength(&mut self, jitter_strength: f32) {
+        self.config.jitter_strength = clamp_finite(
+            jitter_strength,
+            MIN_JITTER_STRENGTH,
+            MAX_JITTER_STRENGTH,
+            DEFAULT_JITTER_STRENGTH,
+        );
+    }
+
+    pub fn jitter_strength(&self) -> f32 {
+        self.config.jitter_strength
+    }
+
     pub fn step(&mut self, dt: f32) {
         let dt = dt.clamp(DT_MIN, DT_MAX);
         if dt <= 0.0 || self.count == 0 {
@@ -314,7 +385,46 @@ impl Sim {
             return;
         }
 
+        self.step_index = self.step_index.wrapping_add(1);
         self.neighbors_visited_last_step = 0;
+
+        // If steering cannot produce non-zero acceleration, skip neighbor/force work.
+        let steering_disabled = self.config.max_force <= EPSILON
+            || ((self.config.sep_weight <= EPSILON
+                && self.config.align_weight <= EPSILON
+                && self.config.coh_weight <= EPSILON)
+                && self.config.jitter_strength <= EPSILON);
+
+        if steering_disabled {
+            for i in 0..self.count {
+                let vx = self.vel_x[i];
+                let vy = self.vel_y[i];
+                let vz = if self.z_mode_enabled { self.vel_z[i] } else { 0.0 };
+
+                let (x, vx) = integrate_axis(self.pos_x[i], vx, dt, self.bounce_x);
+                let (y, vy) = integrate_axis(self.pos_y[i], vy, dt, self.bounce_y);
+                let (z, vz) = if self.z_mode_enabled {
+                    integrate_axis(self.pos_z[i], vz, dt, self.bounce_z)
+                } else {
+                    (DEFAULT_Z_LAYER, 0.0)
+                };
+
+                self.vel_x[i] = vx;
+                self.vel_y[i] = vy;
+                self.vel_z[i] = if self.z_mode_enabled { vz } else { 0.0 };
+                self.pos_x[i] = x;
+                self.pos_y[i] = y;
+                self.pos_z[i] = z;
+
+                let base = 2 * i;
+                self.render_xy[base] = x;
+                self.render_xy[base + 1] = y;
+                self.render_z[i] = z;
+            }
+
+            self.debug_validate_state();
+            return;
+        }
 
         self.neighbor_grid
             .set_cell_size(self.config.neighbor_radius);
@@ -446,6 +556,7 @@ impl Sim {
 
         let neighbor_radius_sq = self.config.neighbor_radius * self.config.neighbor_radius;
         let separation_radius_sq = self.config.separation_radius * self.config.separation_radius;
+        let min_distance_sq = self.config.min_distance * self.config.min_distance;
 
         let mut sep_x = 0.0;
         let mut sep_y = 0.0;
@@ -478,13 +589,13 @@ impl Sim {
                 let dist_sq = math::distance_sq_3d(dx, dy, dz);
 
                 if dist_sq <= EPSILON || dist_sq > neighbor_radius_sq {
-                    return;
+                    return true;
                 }
 
                 if self.config.max_neighbors_sampled > 0
                     && neighbor_count >= self.config.max_neighbors_sampled
                 {
-                    return;
+                    return false;
                 }
 
                 neighbor_count += 1;
@@ -505,8 +616,26 @@ impl Sim {
                     sep_x -= dx * inv_dist_sq;
                     sep_y -= dy * inv_dist_sq;
                     sep_z -= dz * inv_dist_sq;
+
+                    if min_distance_sq > EPSILON && dist_sq < min_distance_sq {
+                        let hard_push_mag =
+                            self.config.min_distance * (1.0 - dist_sq / min_distance_sq);
+                        let (hard_x, hard_y, hard_z) = math::normalize_to_magnitude(
+                            self.config.math_mode,
+                            -dx,
+                            -dy,
+                            if self.z_mode_enabled { -dz } else { 0.0 },
+                            hard_push_mag,
+                        );
+                        sep_x += hard_x;
+                        sep_y += hard_y;
+                        sep_z += hard_z;
+                    }
+
                     sep_count += 1;
                 }
+
+                true
             },
         );
 
@@ -565,6 +694,14 @@ impl Sim {
 
         if !self.z_mode_enabled {
             force_z = 0.0;
+        }
+
+        if self.config.jitter_strength > 0.0 {
+            force_x += hash_unit(self.step_index, i as u32, 0) * self.config.jitter_strength;
+            force_y += hash_unit(self.step_index, i as u32, 1) * self.config.jitter_strength;
+            if self.z_mode_enabled {
+                force_z += hash_unit(self.step_index, i as u32, 2) * self.config.jitter_strength;
+            }
         }
 
         let (fx, fy, fz) = math::limit_magnitude_3d(
@@ -673,6 +810,23 @@ fn clamp_finite(value: f32, min: f32, max: f32, fallback: f32) -> f32 {
     }
 
     value.clamp(min, max)
+}
+
+fn hash_unit(step_index: u32, particle_index: u32, axis: u32) -> f32 {
+    let mut x = step_index
+        .wrapping_mul(0x9E37_79B9)
+        .wrapping_add(particle_index.wrapping_mul(0x85EB_CA6B))
+        .wrapping_add(axis.wrapping_mul(0xC2B2_AE35))
+        .wrapping_add(0x27D4_EB2F);
+
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x85EB_CA6B);
+    x ^= x >> 13;
+    x = x.wrapping_mul(0xC2B2_AE35);
+    x ^= x >> 16;
+
+    let normalized = (x as f32) / (u32::MAX as f32);
+    normalized * 2.0 - 1.0
 }
 
 #[wasm_bindgen]

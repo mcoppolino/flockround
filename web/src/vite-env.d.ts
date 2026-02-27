@@ -28,6 +28,12 @@ declare module "../../sim-wasm/pkg/sim_wasm.js" {
     set_max_neighbors_sampled(maxNeighbors: number): void;
     max_neighbors_sampled(): number;
     neighbors_visited_last_step(): number;
+    set_max_force(maxForce: number): void;
+    max_force(): number;
+    set_min_distance(minDistance: number): void;
+    min_distance(): number;
+    set_jitter_strength(jitterStrength: number): void;
+    jitter_strength(): number;
     set_z_mode(enabled: boolean): void;
     z_mode_enabled(): boolean;
     set_z_force_scale(scale: number): void;

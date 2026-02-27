@@ -15,6 +15,8 @@ export interface SimBoidsConfig {
   maxForce: number;
   mathMode?: SimMathMode;
   maxNeighborsSampled?: number;
+  minDistance?: number;
+  jitterStrength?: number;
 }
 
 export type SimMathMode = "accurate" | "fast";
@@ -79,6 +81,12 @@ export class WasmSimClient {
     if (config.maxNeighborsSampled !== undefined) {
       this.setMaxNeighborsSampled(config.maxNeighborsSampled);
     }
+    if (config.minDistance !== undefined) {
+      this.setMinDistance(config.minDistance);
+    }
+    if (config.jitterStrength !== undefined) {
+      this.setJitterStrength(config.jitterStrength);
+    }
   }
 
   setBounds(width: number, height: number): void {
@@ -127,6 +135,30 @@ export class WasmSimClient {
 
   getNeighborsVisitedLastStep(): number {
     return this.sim.neighbors_visited_last_step();
+  }
+
+  setMaxForce(maxForce: number): void {
+    this.sim.set_max_force(Math.max(0, maxForce));
+  }
+
+  getMaxForce(): number {
+    return this.sim.max_force();
+  }
+
+  setMinDistance(minDistance: number): void {
+    this.sim.set_min_distance(Math.max(0, minDistance));
+  }
+
+  getMinDistance(): number {
+    return this.sim.min_distance();
+  }
+
+  setJitterStrength(jitterStrength: number): void {
+    this.sim.set_jitter_strength(Math.max(0, jitterStrength));
+  }
+
+  getJitterStrength(): number {
+    return this.sim.jitter_strength();
   }
 
   setZMode(enabled: boolean): void {

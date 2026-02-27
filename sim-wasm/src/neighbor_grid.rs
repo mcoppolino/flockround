@@ -72,7 +72,7 @@ impl NeighborGrid {
         wrap_y: bool,
         mut callback: F,
     ) where
-        F: FnMut(usize),
+        F: FnMut(usize) -> bool,
     {
         if i >= self.particle_count || self.particle_count == 0 {
             return;
@@ -99,7 +99,7 @@ impl NeighborGrid {
                 if wrap_x {
                     for x_offset in -cell_radius..=cell_radius {
                         let cell_x = wrap_cell_index(base_cell_x + x_offset, self.cols);
-                        self.scan_cell(
+                        if !self.scan_cell(
                             cell_x,
                             cell_y,
                             i,
@@ -109,11 +109,13 @@ impl NeighborGrid {
                             wrap_x,
                             wrap_y,
                             &mut callback,
-                        );
+                        ) {
+                            return;
+                        }
                     }
                 } else {
                     for cell_x in min_x..=max_x {
-                        self.scan_cell(
+                        if !self.scan_cell(
                             cell_x as usize,
                             cell_y,
                             i,
@@ -123,7 +125,9 @@ impl NeighborGrid {
                             wrap_x,
                             wrap_y,
                             &mut callback,
-                        );
+                        ) {
+                            return;
+                        }
                     }
                 }
             }
@@ -134,7 +138,7 @@ impl NeighborGrid {
             if wrap_x {
                 for x_offset in -cell_radius..=cell_radius {
                     let cell_x = wrap_cell_index(base_cell_x + x_offset, self.cols);
-                    self.scan_cell(
+                    if !self.scan_cell(
                         cell_x,
                         cell_y as usize,
                         i,
@@ -144,11 +148,13 @@ impl NeighborGrid {
                         wrap_x,
                         wrap_y,
                         &mut callback,
-                    );
+                    ) {
+                        return;
+                    }
                 }
             } else {
                 for cell_x in min_x..=max_x {
-                    self.scan_cell(
+                    if !self.scan_cell(
                         cell_x as usize,
                         cell_y as usize,
                         i,
@@ -158,7 +164,9 @@ impl NeighborGrid {
                         wrap_x,
                         wrap_y,
                         &mut callback,
-                    );
+                    ) {
+                        return;
+                    }
                 }
             }
         }
@@ -212,8 +220,9 @@ impl NeighborGrid {
         wrap_x: bool,
         wrap_y: bool,
         callback: &mut F,
-    ) where
-        F: FnMut(usize),
+    ) -> bool
+    where
+        F: FnMut(usize) -> bool,
     {
         let cell_index = cell_y * self.cols + cell_x;
         let mut candidate = self.head[cell_index];
@@ -232,13 +241,15 @@ impl NeighborGrid {
                 } else {
                     raw_dy
                 };
-                if dx * dx + dy * dy <= radius_sq {
-                    callback(candidate);
+                if dx * dx + dy * dy <= radius_sq && !callback(candidate) {
+                    return false;
                 }
             }
 
             candidate = self.next[candidate];
         }
+
+        true
     }
 }
 
@@ -263,7 +274,10 @@ mod tests {
 
     fn sorted_neighbors(grid: &NeighborGrid, i: usize, radius: f32) -> Vec<usize> {
         let mut neighbors = Vec::new();
-        grid.for_each_neighbor_with_wrap(i, radius, true, true, |j| neighbors.push(j));
+        grid.for_each_neighbor_with_wrap(i, radius, true, true, |j| {
+            neighbors.push(j);
+            true
+        });
         neighbors.sort_unstable();
         neighbors
     }
