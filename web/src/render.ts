@@ -86,8 +86,14 @@ export class FlockView {
     this.app.render();
   }
 
-  render(positions: Float32Array, depth?: Float32Array): void {
-    const nextCount = positions.length >>> 1;
+  render(
+    positions: Float32Array,
+    depth?: Float32Array,
+    sampleStride = 1,
+  ): void {
+    const totalCount = positions.length >>> 1;
+    const stride = Math.max(1, Math.floor(sampleStride));
+    const nextCount = Math.ceil(totalCount / stride);
     if (!this.mesh || nextCount !== this.particleCount) {
       this.rebuildMesh(nextCount);
     }
@@ -99,15 +105,16 @@ export class FlockView {
 
     const width = this.app.screen.width * this.renderScale;
     const height = this.app.screen.height * this.renderScale;
-    const hasDepth = Boolean(depth) && (depth?.length ?? 0) >= nextCount;
+    const hasDepth = Boolean(depth) && (depth?.length ?? 0) >= totalCount;
     const baseHalfSize = this.theme.particleSize * 0.5;
 
-    for (let i = 0; i < nextCount; i += 1) {
-      const p = i * 2;
+    let renderIndex = 0;
+    for (let sourceIndex = 0; sourceIndex < totalCount; sourceIndex += stride) {
+      const p = sourceIndex * 2;
       const x = positions[p] * width;
       const y = positions[p + 1] * height;
-      const v = i * 8;
-      const z = hasDepth ? clamp01(depth![i]) : DEFAULT_Z_LAYER;
+      const v = renderIndex * 8;
+      const z = hasDepth ? clamp01(depth![sourceIndex]) : DEFAULT_Z_LAYER;
       const halfSize = baseHalfSize * (0.55 + 0.9 * z);
 
       this.vertices[v] = x - halfSize;
@@ -118,6 +125,7 @@ export class FlockView {
       this.vertices[v + 5] = y + halfSize;
       this.vertices[v + 6] = x - halfSize;
       this.vertices[v + 7] = y + halfSize;
+      renderIndex += 1;
     }
 
     this.mesh.geometry.getBuffer("aPosition").update();
