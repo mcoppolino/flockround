@@ -1,0 +1,7 @@
+node_modules/
+web/node_modules/
+dist/
+web/dist/
+sim-wasm/pkg/
+*.log
+.DS_Store

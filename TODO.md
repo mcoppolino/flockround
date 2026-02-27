@@ -4,11 +4,33 @@ Goal: a lightweight, high-resolution “murmuration” background with **real bo
 
 ---
 
+## Task Status
+
+- [x] Task 0 — Repo + Tooling Baseline
+- [ ] Task 1 — Data Model + Public API Contracts
+- [ ] Task 2 — Pixi WebGL Renderer Skeleton
+- [ ] Task 3 — Neighbor Search Module
+- [ ] Task 4 — Real Boids Forces
+- [ ] Task 5 — Accuracy vs Compute Swappability
+- [ ] Task 6 — JS/WASM Interop + Render Loop
+- [ ] Task 7 — Shape Influence System
+- [ ] Task 8 — Styling/Theming System
+- [ ] Task 9 — Performance Tuning Pass
+- [ ] Task 10 — Nice-to-Haves
+
+---
+
 ## Task 0 — Repo + Tooling Baseline
+
+### Reasoning Hint
+- Recommended model level: **Low**.
+- Switch to **Medium** when diagnosing cross-toolchain build/dev integration issues.
 
 ### Deliverables
 - Monorepo with Rust WASM package + Vite TS app + Pixi renderer
 - One command to run dev, one to build
+- Pinned toolchain and package versions, documented in-repo
+- Makefile targets for common workflows so the command surface stays stable
 
 ### Steps
 1. Create repo structure:
@@ -17,10 +39,18 @@ Goal: a lightweight, high-resolution “murmuration” background with **real bo
 2. Add build tooling:
    - `wasm-pack` for Rust build
    - Vite config to import wasm pack output
-3. Add scripts:
+3. Pin versions and document them:
+   - Rust via `rust-toolchain.toml`
+   - Node via `.nvmrc` (or `.node-version`) and `engines`
+   - package manager via `packageManager` in root `package.json`
+   - `wasm-pack` version requirement in README
+4. Add scripts:
    - `dev`: build wasm in watch mode + run Vite
    - `build`: release wasm + Vite build
-4. Add formatting/linting:
+5. Add Makefile targets:
+   - `install`, `dev`, `build`, `lint`, `format`, `check`, `test`
+   - `wasm-dev`, `wasm-build` for direct Rust/WASM workflows
+6. Add formatting/linting:
    - Rust: `rustfmt`, `clippy`
    - TS: eslint + prettier (minimal rules, consistent formatting)
 
@@ -28,15 +58,23 @@ Goal: a lightweight, high-resolution “murmuration” background with **real bo
 
 ## Task 1 — Data Model + Public API Contracts (Modularity First)
 
+### Reasoning Hint
+- Recommended model level: **High**.
+- Switch to **Medium** only after ABI/contracts and invariants are locked, for mechanical plumbing.
+
 ### Deliverables
 - A stable sim API you can keep as you optimize internals
 - Typed-array backed particle state (no per-bird JS objects)
+- Contract-first memory boundary: internal compute layout can evolve, external render ABI stays stable
 
 ### Steps
-1. Define core particle state layout in Rust:
-   - positions, velocities, optional depth/size scalar
-   - choose **SoA** (separate arrays) for compute or **AoS** (interleaved) for upload
-   - recommended: SoA for sim, plus an interleaved export buffer for renderer
+1. Lock the core particle state contract in Rust:
+   - internal compute layout = **SoA** (`pos_x`, `pos_y`, `vel_x`, `vel_y`)
+   - optional future Rust-only arrays are allowed (`seed/phase`, `depth_z`, `tmp_*` scratch)
+   - external render layout = one preallocated interleaved `render_xy` buffer (`[x0, y0, x1, y1, ...]`)
+   - JS gets a stable pointer/view to `render_xy` and reuses it every frame
+   - JS must not read internal position/velocity arrays or multiple particle pointers
+   - this boundary allows internal optimizations later without renderer/API refactors
 2. Define `SimConfig` (Rust) with weights/radii/speeds:
    - `sep_weight`, `align_weight`, `coh_weight`
    - `neighbor_radius`, `separation_radius`
@@ -46,17 +84,36 @@ Goal: a lightweight, high-resolution “murmuration” background with **real bo
    - active shape influence id + morph strength
    - bounds mode (wrap vs bounce)
 4. Define WASM exports:
-   - `new(count, seed, config_json?)`
+   - `new(count, seed, width, height)`
    - `set_config(...)` (or `set_config_json`)
    - `set_inputs(...)`
    - `step(dt)`
-   - `positions_ptr()`, `velocities_ptr()` (optional), `count()`
+   - `set_bounds(width, height)`
+   - `count()`
+   - `render_xy_ptr()` (or semantic equivalent name)
+   - optional: `render_xy_len()` returning `2 * count`
 5. In TS, wrap exports in a clean class:
    - hides pointers, exposes `Float32Array` views
+   - keep one cached `Float32Array` view for `render_xy`
+   - if `wasm.memory.buffer` changes, recreate the view safely
+6. Add invariants and checks early (debug/test builds):
+   - no NaN/Inf in particle state after `step`
+   - speed clamp is respected
+   - positions remain valid for selected bounds mode (wrap/bounce)
+7. Decide and document coordinate convention in API docs:
+   - standardize on normalized coordinates (`x,y in [0,1]`) in sim + `render_xy`
+   - renderer maps normalized values to screen space
+8. Ensure `step()` refresh pattern is explicit and stable:
+   - compute boids using SoA, integrate, then write `render_xy[2*i], render_xy[2*i+1]`
+   - keep the copy path as default; optimize later only behind the same ABI
 
 ---
 
 ## Task 2 — Pixi WebGL Renderer Skeleton (Background-Ready)
+
+### Reasoning Hint
+- Recommended model level: **Medium**.
+- Switch to **High** if batching approach or renderer architecture decisions become unclear.
 
 ### Deliverables
 - Fullscreen canvas behind UI
@@ -84,6 +141,10 @@ Goal: a lightweight, high-resolution “murmuration” background with **real bo
 
 ## Task 3 — Neighbor Search Module (Grid / Spatial Hash)
 
+### Reasoning Hint
+- Recommended model level: **High**.
+- Switch to **Medium** after the core algorithm is validated, for tests and integration wiring.
+
 ### Deliverables
 - O(N)ish neighbor query baseline for real boids
 - Internals designed so you can swap accuracy/perf tradeoffs
@@ -104,6 +165,10 @@ Goal: a lightweight, high-resolution “murmuration” background with **real bo
 ---
 
 ## Task 4 — Real Boids Forces (Separation, Alignment, Cohesion)
+
+### Reasoning Hint
+- Recommended model level: **High**.
+- Switch to **Medium** once force equations are stable and invariants/tests pass.
 
 ### Deliverables
 - Stable flocking “leave them alone” behavior across the screen
@@ -130,6 +195,10 @@ Goal: a lightweight, high-resolution “murmuration” background with **real bo
 
 ## Task 5 — Accuracy vs Compute Swappability (Distance + Math Helpers)
 
+### Reasoning Hint
+- Recommended model level: **High**.
+- Switch to **Medium** for config plumbing, docs, and benchmark command wiring after math strategy design is set.
+
 ### Deliverables
 - A clear place to trade precision for speed without rewriting boids logic
 
@@ -152,6 +221,10 @@ Goal: a lightweight, high-resolution “murmuration” background with **real bo
 ---
 
 ## Task 6 — JS/WASM Interop + Render Loop
+
+### Reasoning Hint
+- Recommended model level: **Medium**.
+- Switch to **High** if memory view invalidation, dt stability, or GC churn issues appear.
 
 ### Deliverables
 - Smooth animation loop with no per-frame allocations
@@ -176,32 +249,46 @@ Goal: a lightweight, high-resolution “murmuration” background with **real bo
 
 ## Task 7 — Shape Influence System (Schema + Fuzz)
 
+### Reasoning Hint
+- Recommended model level: **High**.
+- Switch to **Medium** after interface/schema boundaries are frozen, for incremental backend implementation.
+
 ### Deliverables
 - Birds “flock to” user-defined shapes with fuzzy organic behavior
 - Shape schema easy to define (upload/draw simple shapes later)
+- Incremental architecture that reaches morph targets without large refactors
 
 ### Steps
-1. Define a shape schema (versioned) in TS + Rust:
+1. Define the stable architecture boundary first:
+   - versioned TS/Rust `Shape` schema (`ShapeV1`)
+   - `ShapeInfluence` interface in Rust (`force_at(position, boid_id) -> Vec2`)
+   - JS/WASM API based on shape IDs + weights, not backend-specific internals
+2. Implement v1 backend as sampled attractor points:
    - `Shape` with `type` and params
    - types: `circle`, `segment/polyline`, `polygon`, `text` (later), `svg-path` (later)
-2. Decide shape influence representation:
-   - **v1 (simple): attractor points** sampled from shape boundary/area
-   - later: SDF texture/field for higher quality
-3. Implement `ShapeField` in Rust:
+   - sampled from boundary and/or area for fuzzy flock targets
+3. Define v2 migration path now (behind same interface):
+   - reserve a second backend (SDF/field-based) with no public API changes
+   - keep schema versioning and conversion rules documented
+4. Implement `ShapeField` in Rust:
    - stores sampled points + a strength/falloff
    - exposes `force_at(position)` returning a steering vector
-4. Add “fuzz”:
+5. Add “fuzz”:
    - per-bird jitter seed influences sampling offset
    - noise in force direction magnitude for organic edges
-5. Blend with boids:
+6. Blend with boids:
    - total accel includes `shape_weight * shape_force`
    - with an ease parameter `morph_strength` (0..1)
-6. Add shape switching hooks in TS:
+7. Add shape switching hooks in TS:
    - `setActiveShape(id, strength)`
 
 ---
 
 ## Task 8 — Styling/Theming System (Colors, Opacity, Background Polish)
+
+### Reasoning Hint
+- Recommended model level: **Low → Medium**.
+- Switch to **High** only if theme/render choices affect batching, memory churn, or simulation coupling.
 
 ### Deliverables
 - One place to swap color schemes without touching sim
@@ -225,9 +312,14 @@ Goal: a lightweight, high-resolution “murmuration” background with **real bo
 
 ## Task 9 — Performance Tuning Pass (Ship-Ready)
 
+### Reasoning Hint
+- Recommended model level: **High**.
+- Switch to **Medium** for routine baseline collection and reporting once tuning knobs are defined.
+
 ### Deliverables
 - Stable FPS across a wide range of devices
 - Clear, maintainable optimizations (no premature cleverness)
+- Lightweight, repeatable benchmark tracking (not a deep perf study)
 
 ### Steps
 1. Add an adaptive quality controller in TS:
@@ -244,10 +336,20 @@ Goal: a lightweight, high-resolution “murmuration” background with **real bo
    - no Rust allocations per step (grid rebuild should reuse buffers)
 4. Add debug overlay (dev only):
    - FPS, particle count, neighbors visited, tier
+5. Add lightweight benchmark commands:
+   - one Rust sim benchmark (`N`, `steps`, mode) with text/JSON output
+   - one browser-side sampling script for frame-time percentile snapshots
+6. Track trends, not absolute machine-specific FPS:
+   - store baseline results in-repo
+   - compare `% change` versus baseline across key configs (`5k`, `10k`, fast vs accurate)
 
 ---
 
 ## Task 10 — Nice-to-Haves (Pick Off Incrementally)
+
+### Reasoning Hint
+- Recommended model level: **Medium** overall.
+- Switch per subtask: 10A **Low → Medium**, 10B **Medium**, 10C **High** (batched oriented rendering/LOD complexity).
 
 ### 10A — Parameterization (Optional)
 Steps
@@ -289,10 +391,15 @@ Steps
 
 ---
 
-## Suggested Build Order (Fastest Path to “Looks Good”)
-1. Task 0 → 2 → 6 (get something on screen)
-2. Task 1 → 3 → 4 (real boids working)
-3. Task 5 (modularity + perf presets)
-4. Task 7 (shapes + fuzz)
-5. Task 8 → 9 (background polish + ship)
-6. Task 10 (extras)
+## Execution Order (Sequential)
+1. Task 0 — Repo + Tooling Baseline
+2. Task 1 — Data Model + Public API Contracts
+3. Task 2 — Pixi WebGL Renderer Skeleton
+4. Task 3 — Neighbor Search Module
+5. Task 4 — Real Boids Forces
+6. Task 5 — Accuracy vs Compute Swappability
+7. Task 6 — JS/WASM Interop + Render Loop
+8. Task 7 — Shape Influence System
+9. Task 8 — Styling/Theming System
+10. Task 9 — Performance Tuning Pass
+11. Task 10 — Nice-to-Haves

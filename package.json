@@ -1,0 +1,30 @@
+{
+  "name": "flockround",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "npm@10.9.2",
+  "workspaces": [
+    "web"
+  ],
+  "engines": {
+    "node": "22.16.0"
+  },
+  "scripts": {
+    "dev": "npm run wasm:build:dev && concurrently -k -n WASM,WEB \"npm run wasm:watch\" \"npm --workspace web run dev\"",
+    "build": "npm run wasm:build:release && npm --workspace web run build",
+    "lint": "npm --workspace web run lint",
+    "format": "npm --workspace web run format",
+    "check": "npm run wasm:check && npm run lint",
+    "test": "npm run wasm:test",
+    "wasm:build:dev": "wasm-pack build sim-wasm --dev --target web --out-dir pkg --out-name sim_wasm",
+    "wasm:build:release": "wasm-pack build sim-wasm --release --target web --out-dir pkg --out-name sim_wasm",
+    "wasm:watch": "chokidar \"sim-wasm/src/**/*.rs\" \"sim-wasm/Cargo.toml\" -c \"npm run wasm:build:dev\"",
+    "wasm:check": "cargo clippy --manifest-path sim-wasm/Cargo.toml --all-targets -- -D warnings",
+    "wasm:test": "cargo test --manifest-path sim-wasm/Cargo.toml",
+    "wasm:format": "cargo fmt --manifest-path sim-wasm/Cargo.toml"
+  },
+  "devDependencies": {
+    "chokidar-cli": "^3.0.0",
+    "concurrently": "^9.2.1"
+  }
+}
