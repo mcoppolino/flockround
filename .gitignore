@@ -3,5 +3,6 @@ web/node_modules/
 dist/
 web/dist/
 sim-wasm/pkg/
+sim-wasm/target/
 *.log
 .DS_Store
