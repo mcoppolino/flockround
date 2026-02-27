@@ -9,7 +9,6 @@ async function start(): Promise<void> {
   }
 
   const sim = await initWasmModule();
-  sim.setBounds(window.innerWidth, window.innerHeight);
 
   const view = await FlockView.create(host, {
     dprCap: 2,
@@ -17,10 +16,33 @@ async function start(): Promise<void> {
   });
   view.setTheme(DEFAULT_FLOCK_THEME);
 
-  window.addEventListener("resize", () => {
-    sim.setBounds(window.innerWidth, window.innerHeight);
-    view.resize();
+  const applyResize = (): void => {
+    const width = Math.floor(window.innerWidth);
+    const height = Math.floor(window.innerHeight);
+    sim.setBounds(width, height);
+    view.resize(width, height);
+  };
+
+  let pendingResize = false;
+  const scheduleResize = (): void => {
+    if (pendingResize) {
+      return;
+    }
+    pendingResize = true;
+    requestAnimationFrame(() => {
+      pendingResize = false;
+      applyResize();
+    });
+  };
+
+  window.addEventListener("resize", scheduleResize);
+  window.addEventListener("fullscreenchange", () => {
+    scheduleResize();
+    // Mac fullscreen transitions can settle after the initial resize event.
+    setTimeout(scheduleResize, 120);
+    setTimeout(scheduleResize, 260);
   });
+  applyResize();
 
   let previousTime = performance.now();
   let frameCount = 0;

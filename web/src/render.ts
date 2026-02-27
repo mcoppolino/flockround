@@ -37,6 +37,9 @@ export class FlockView {
   private mesh: MeshSimple | null = null;
   private vertices: Float32Array = new Float32Array(0);
   private particleCount = 0;
+  private lastWidth = 0;
+  private lastHeight = 0;
+  private lastResolution = 0;
 
   private constructor(
     host: HTMLElement,
@@ -73,12 +76,14 @@ export class FlockView {
     this.app.renderer.background.alpha = theme.backgroundAlpha;
 
     if (!this.mesh) {
+      this.app.render();
       return;
     }
 
     this.mesh.tint = theme.particleColor;
     this.mesh.alpha = theme.particleAlpha;
     this.mesh.blendMode = theme.blendMode;
+    this.app.render();
   }
 
   render(positions: Float32Array): void {
@@ -88,6 +93,7 @@ export class FlockView {
     }
 
     if (!this.mesh || nextCount === 0) {
+      this.app.render();
       return;
     }
 
@@ -112,26 +118,48 @@ export class FlockView {
     }
 
     this.mesh.geometry.getBuffer("aPosition").update();
+    this.app.render();
   }
 
-  resize(): void {
+  resize(nextWidth?: number, nextHeight?: number): void {
+    const width = Math.floor(nextWidth ?? this.host.clientWidth);
+    const height = Math.floor(nextHeight ?? this.host.clientHeight);
+    if (width < 1 || height < 1) {
+      // Fullscreen transitions can briefly report zero-sized host bounds.
+      return;
+    }
+
     const resolution = Math.min(window.devicePixelRatio || 1, this.dprCap);
+    const hasSizeChange = width !== this.lastWidth || height !== this.lastHeight;
+    const hasResolutionChange = resolution !== this.lastResolution;
+    if (!hasSizeChange && !hasResolutionChange) {
+      return;
+    }
+
+    this.lastWidth = width;
+    this.lastHeight = height;
+    this.lastResolution = resolution;
     this.app.renderer.resolution = resolution;
-    this.app.renderer.resize(this.host.clientWidth, this.host.clientHeight);
+    this.app.renderer.resize(width, height);
+    this.app.render();
   }
 
   private async init(): Promise<void> {
     await this.app.init({
+      preference: "webgl",
+      autoStart: false,
       antialias: false,
       autoDensity: true,
+      clearBeforeRender: true,
       resolution: Math.min(window.devicePixelRatio || 1, this.dprCap),
       backgroundColor: this.theme.backgroundColor,
       backgroundAlpha: this.theme.backgroundAlpha,
-      resizeTo: this.host,
     });
 
     this.host.appendChild(this.app.canvas);
     this.setTheme(this.theme);
+    this.resize();
+    this.app.render();
   }
 
   private rebuildMesh(count: number): void {

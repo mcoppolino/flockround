@@ -1,8 +1,13 @@
+mod neighbor_grid;
+
+use neighbor_grid::NeighborGrid;
 use wasm_bindgen::prelude::*;
 
 const MIN_BOUND: f32 = 1.0e-6;
 const DT_MIN: f32 = 0.0;
 const DT_MAX: f32 = 0.1;
+const GRID_WORLD_SIZE: f32 = 1.0;
+const DEFAULT_NEIGHBOR_RADIUS: f32 = 0.08;
 
 #[derive(Clone, Copy)]
 struct Lcg32 {
@@ -38,6 +43,7 @@ pub struct Sim {
     vel_x: Vec<f32>,
     vel_y: Vec<f32>,
     render_xy: Vec<f32>,
+    neighbor_grid: NeighborGrid,
 }
 
 #[wasm_bindgen]
@@ -57,7 +63,7 @@ impl Sim {
         for i in 0..count {
             pos_x[i] = rng.next_f32();
             pos_y[i] = rng.next_f32();
-            vel_x[i] = (rng.next_f32() - 0.5) * 0.16 + 0.06;
+            vel_x[i] = (rng.next_f32() - 0.5) * 0.16;
             vel_y[i] = (rng.next_f32() - 0.5) * 0.16;
 
             let base = 2 * i;
@@ -74,6 +80,12 @@ impl Sim {
             vel_x,
             vel_y,
             render_xy,
+            neighbor_grid: NeighborGrid::new(
+                count,
+                GRID_WORLD_SIZE,
+                GRID_WORLD_SIZE,
+                DEFAULT_NEIGHBOR_RADIUS,
+            ),
         }
     }
 
@@ -96,6 +108,19 @@ impl Sim {
             let base = 2 * i;
             self.render_xy[base] = x;
             self.render_xy[base + 1] = y;
+        }
+
+        self.neighbor_grid.rebuild(
+            &self.pos_x,
+            &self.pos_y,
+            GRID_WORLD_SIZE,
+            GRID_WORLD_SIZE,
+        );
+
+        // Task 3 wires the grid through Sim without boids force integration yet.
+        if self.count > 0 {
+            self.neighbor_grid
+                .for_each_neighbor(0, DEFAULT_NEIGHBOR_RADIUS, |_| {});
         }
     }
 
