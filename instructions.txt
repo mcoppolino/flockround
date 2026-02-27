@@ -1,0 +1,352 @@
+You are implementing a modular boids simulation project (“flockround”) with:
+- Rust → WASM for simulation
+- TypeScript + Vite for web app
+- PixiJS WebGL for rendering
+Requirements:
+- Real boids (separation, alignment, cohesion) with neighbor search (uniform grid)
+- Modular helpers to swap accuracy vs compute (distance calc, normalize, inv sqrt, neighbor sampling cap)
+- Shape influence system: easy schema for simple shapes; birds can flock to shapes with fuzz; later morph targets
+- Easy theming: color schemes, opacity, blending; suitable as a portfolio background
+Optimization goals:
+- Prioritize readability + maintainability first, then performance; do not introduce complex optimizations unless they are clearly isolated behind interfaces.
+
+CRITICAL WORKFLOW RULES (read carefully):
+- Work incrementally: implement one task at a time.
+- After each task: update TODO.md by checking off that task, and ensure the build passes.
+- Avoid per-frame allocations in TS and Rust step loop.
+- No per-particle JS objects; use typed arrays and WASM memory views.
+- Provide brief rationale in comments where it helps future maintainers.
+- When the human points out a problem/bug/perf issue:
+  - DO NOT “hot patch” or apply a one-off quick fix.
+  - Debug thoroughly: identify the root cause, write it down, and fix it in a way that aligns with the architecture and TODO.md plan.
+  - If the plan needs adjustment, update TODO.md and the relevant module boundaries instead of papering over the issue.
+  - Ensure the fix is generalized (prevents recurrence) and is covered by a small test or invariant check when appropriate.
+
+Output requirements for each task:
+1) List files changed (with brief summary)
+2) Provide code patches (or file contents) clearly
+3) Update TODO.md with completed task checkbox
+4) Provide quick manual run instructions and a sanity check (what should appear on screen)
+
+Do NOT add optional features unless explicitly requested in the current task. Keep modules clean. Keep configs minimal and documented.
+
+
+========================
+PROMPT 1 — Scaffold repo + build tooling + TODO
+========================
+Task: Create the repository scaffold and dev/build pipeline.
+
+Implement:
+- Monorepo structure:
+  /sim-wasm (Rust crate compiled to wasm with wasm-bindgen)
+  /web (Vite + TS + PixiJS)
+- Add scripts so a human can run:
+  - `npm install`
+  - `npm run dev` from repo root
+  - `npm run build`
+- Configure wasm-pack build output to be importable by Vite (local package or workspace).
+- Add formatting/lint:
+  - rustfmt + clippy (document commands)
+  - eslint + prettier for TS (minimal rules)
+- Create TODO.md with all tasks (unchecked initially) reflecting the plan:
+  0 Tooling, 1 API contracts, 2 Pixi renderer, 3 neighbor grid, 4 boids, 5 modular math, 6 render loop, 7 shapes, 8 theming, 9 perf pass, 10 nice-to-haves.
+- Add README.md with minimal instructions.
+
+Acceptance:
+- `npm run dev` launches a page that at least shows a blank Pixi canvas and logs “WASM loaded” (sim can be stubbed for now).
+- `npm run build` succeeds.
+
+Output:
+- Files changed + explanation
+- Patches
+- Updated TODO.md (mark Task 0 complete)
+- Run instructions
+
+
+========================
+PROMPT 2 — Define Rust sim state + WASM API (no boids yet)
+========================
+Task: Implement the Rust simulation state and a stable WASM API contract, without boids logic yet.
+
+Implement in sim-wasm:
+- Particle state stored in contiguous arrays (typed, predictable):
+  - positions (x,y), velocities (x,y)
+  - keep SoA internally OR interleaved, but expose an interleaved XY buffer for rendering.
+- Sim struct with:
+  - constructor `new(count: usize, seed: u32, width: f32, height: f32)`
+  - `step(dt: f32)` that updates positions with a simple placeholder motion (e.g., constant drift + wrap) to prove the pipe works.
+  - `set_bounds(width, height)`
+  - `positions_ptr() -> *const f32` returning pointer to interleaved XY buffer
+  - `count() -> usize`
+- Ensure NO allocations in `step()` (pre-allocate buffers in constructor).
+- Add basic docs/comments.
+
+Implement in web:
+- WASM loader module that instantiates Sim, creates a Float32Array view for positions, and logs count + pointer.
+- A minimal animation loop that calls step and prints the first position occasionally (no Pixi rendering changes yet).
+
+Acceptance:
+- Running dev shows console logs updating and no crashes.
+- No per-frame allocations: avoid re-creating typed array views each frame (create once, reuse).
+- `cargo test` optional; but `cargo build` and wasm build must succeed.
+
+Output:
+- Files changed + explanation
+- Patches
+- Update TODO.md (mark Task 1 complete)
+- Manual verification steps
+
+
+========================
+PROMPT 3 — Pixi renderer: batched points + theme skeleton
+========================
+Task: Implement the Pixi renderer module that can efficiently draw many particles as a background.
+
+Implement:
+- `PixiRenderer` class in web:
+  - creates Pixi Application
+  - supports resize and DPR cap
+  - renders particles from a Float32Array interleaved XY positions buffer
+- Rendering must be batched:
+  - Do NOT create one DisplayObject per particle.
+  - Use Pixi Mesh/Geometry or ParticleContainer with a single texture (choose the cleanest maintainable approach).
+- Provide theming skeleton:
+  - Theme includes background color, particle color, particle alpha, blend mode.
+  - `renderer.setTheme(theme)` updates visuals.
+- Minimal demo: render the placeholder-moving particles from WASM.
+
+Acceptance:
+- On screen: moving dot cloud.
+- Reasonable performance at 10k particles on a laptop (no stutter).
+- Theme changes are easy and centralized.
+
+Output:
+- Files changed + explanation
+- Patches
+- Update TODO.md (mark Task 2 complete)
+- Manual run steps
+
+
+========================
+PROMPT 4 — Neighbor grid module (uniform grid + no boids yet)
+========================
+Task: Implement a neighbor search module in Rust using a uniform grid / spatial hash, designed for modularity.
+
+Implement:
+- `NeighborGrid` struct:
+  - configurable cell size (default = neighbor_radius)
+  - arrays: `head[cell]` + `next[i]` linked list
+  - methods:
+    - `rebuild(positions_x, positions_y, width, height)`
+    - `for_each_neighbor(i, radius, callback)` iterating neighbors in adjacent cells
+- Design for zero allocations per frame: buffers reused, rebuilt by clearing heads.
+- Keep it readable with clear comments and unit tests for a tiny scenario:
+  - place a few particles in known cells and verify neighbor iteration results.
+
+Acceptance:
+- Tests pass.
+- No boids integration yet; grid compiles and can be called from Sim.
+
+Output:
+- Files changed + explanation
+- Patches
+- Update TODO.md (mark Task 3 complete)
+- Notes on how boids will call it
+
+
+========================
+PROMPT 5 — Real boids forces using the grid
+========================
+Task: Implement classic boids (separation, alignment, cohesion) in Rust using NeighborGrid.
+
+Implement:
+- In `Sim::step(dt)`:
+  - rebuild grid each frame
+  - for each boid:
+    - compute sep/align/coh using neighbors within neighbor_radius, and sep within separation_radius
+    - apply weighted sum, clamp max_force, integrate velocity and position
+    - clamp speed in [min,max]
+  - wrap around screen bounds
+- Add `SimConfig` with boids parameters and `set_config(...)` exported to JS.
+- Keep math readable and well-factored (helpers allowed but don’t over-abstract).
+
+Acceptance:
+- Behavior: flocking emerges naturally, no explosive instability.
+- Stable on dt variations (clamp dt).
+- Performance: runs ~5k boids smoothly on an average laptop.
+
+Output:
+- Files changed + explanation
+- Patches
+- Update TODO.md (mark Task 4 complete)
+- Parameter defaults and rationale
+
+
+========================
+PROMPT 6 — Pluggable “accuracy vs compute” helpers
+========================
+Task: Add modular helpers to trade accuracy vs performance for distance/normalize and neighbor sampling.
+
+Implement:
+- Rust module `math/` with:
+  - `DistanceMetric` (squared Euclidean default)
+  - `NormalizeStrategy` (Exact vs FastInvSqrt)
+- Provide config toggles in SimConfig:
+  - `math_mode: Accurate|Fast`
+  - `max_neighbors_sampled: Option<usize>` (cap neighbors to K per boid)
+- Wire boids code so it calls these helpers (centralized), not raw math everywhere.
+- Keep it simple: two modes only, documented, no micro-optimizations sprinkled around.
+- Add a small dev-only benchmark function or debug counter for neighbors visited (feature-gated).
+
+Acceptance:
+- Switching modes changes behavior slightly but stays stable.
+- Fast mode measurably reduces CPU cost at higher N.
+- Code remains readable.
+
+Output:
+- Files changed + explanation
+- Patches
+- Update TODO.md (mark Task 5 complete)
+- How to toggle modes from TS
+
+
+========================
+PROMPT 7 — Integrate render loop + inputs (pointer interaction)
+========================
+Task: Implement the full TS render loop with inputs and pointer interaction, with no GC churn.
+
+Implement:
+- TS `Controller` that:
+  - tracks pointer position (normalized or pixels, but consistent)
+  - passes pointer inputs to WASM each frame
+- Rust:
+  - add pointer repulsion force (radius + strength) applied in step
+  - expose setters for pointer position and strength
+- TS loop:
+  - uses requestAnimationFrame
+  - clamps dt
+  - calls sim.step(dt)
+  - calls renderer.render(positions)
+- Add visibility pause (document.hidden).
+
+Acceptance:
+- Pointer “pushes” flock in a pleasing way.
+- No per-frame allocations in TS (verify by code review; no new arrays in loop).
+- Background usage: canvas can sit behind simple HTML nav.
+
+Output:
+- Files changed + explanation
+- Patches
+- Update TODO.md (mark Task 6 complete)
+
+
+========================
+PROMPT 8 — Shape influence system v1 (schema + fuzzy attractors)
+========================
+Task: Add a shape influence system so birds can flock toward shapes with fuzz, designed for future morphing.
+
+Implement:
+- TS shape schema (versioned):
+  - Shape types: circle, polyline, polygon (enough for now)
+  - Each shape can be defined in JSON in web code.
+- TS generates sampled attractor points from shape definitions (e.g., 512–4096 points), with optional fill.
+- Rust accepts a shape buffer:
+  - interleaved XY points + count
+  - stores in Sim (pre-allocated max size or Vec set once on update, but NOT per frame)
+- Each step, apply an additional steering force toward nearest attractor point(s) with:
+  - falloff with distance
+  - fuzz (per-boid random offset / noise) so it doesn’t look rigid
+- TS hover hooks:
+  - define 2 demo shapes and toggle via simple keyboard keys for now (no UI yet)
+  - `morph_strength` eases in/out
+
+Acceptance:
+- You can toggle shape influence and see flock “suggest” the shape while still flocking.
+- Schema is easy to extend (clear docs).
+- No per-frame allocations.
+
+Output:
+- Files changed + explanation
+- Patches
+- Update TODO.md (mark Task 7 complete)
+
+
+========================
+PROMPT 9 — Theming + background polish (colors, opacity, blending)
+========================
+Task: Implement easy theming controls so it looks great as a background.
+
+Implement:
+- TS Theme object with:
+  - background color/alpha
+  - particle color(s)
+  - particle alpha
+  - blend mode
+  - optional depth-based tint hook (stub for later)
+- Renderer supports:
+  - switching themes at runtime
+  - a few built-in presets (e.g. Night Sky, Fog, High Contrast)
+- Keep it simple: no UI; expose a function `setThemeByName("night")`.
+
+Acceptance:
+- Themes change with one call.
+- Default looks like tasteful background art (not bright arcade particles).
+
+Output:
+- Files changed + explanation
+- Patches
+- Update TODO.md (mark Task 8 complete)
+
+
+========================
+PROMPT 10 — Performance pass + adaptive quality (ship-ready)
+========================
+Task: Add a ship-ready performance pass without making the code complex.
+
+Implement:
+- TS adaptive quality controller:
+  - caps DPR
+  - adjusts renderScale first
+  - optionally adjusts particle count (if you support respawn)
+- Add debug overlay (dev-only) showing:
+  - FPS, particles, tier, neighbors visited
+- Ensure:
+  - no per-frame allocations
+  - rust step loop no allocations (grid rebuild reuses buffers)
+  - stable dt clamp
+- Document recommended defaults for desktop/mobile.
+
+Acceptance:
+- Runs smoothly on midrange laptop at 10k+ boids.
+- Degrades gracefully on slower machines.
+
+Output:
+- Files changed + explanation
+- Patches
+- Update TODO.md (mark Task 9 complete)
+- Notes on where to tune defaults
+
+
+========================
+PROMPT 11 — Nice-to-haves (depth illusion + bird shapes with LOD)
+========================
+Task: Implement optional nice-to-haves incrementally, behind flags.
+
+10B Depth illusion:
+- Add per-boid depth scalar z (0..1), updated slowly.
+- Renderer uses z to scale point size and alpha.
+- Keep it subtle and theme-compatible.
+
+10C Bird shapes:
+- Render chevrons/triangles oriented by velocity direction.
+- Use LOD: far = dots, near = chevrons.
+- Must remain batched; no DisplayObject-per-bird.
+
+Acceptance:
+- Depth adds “3D” feel.
+- Bird shapes don’t tank performance.
+
+Output:
+- Files changed + explanation
+- Patches
+- Update TODO.md (mark Task 10 complete)
