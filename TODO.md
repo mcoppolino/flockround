@@ -1,6 +1,6 @@
 # Flockround Boids Project Plan (Rust WASM + Pixi WebGL)
 
-Goal: a lightweight, high-resolution “murmuration” background with **real boids** (separation, alignment, cohesion), written for **performance + readability + maintainability**, with **modular helpers** (distance/neighbor calc tradeoffs) and a **shape influence system** that later supports morphing into icons/logos with fuzz.
+Goal: a lightweight, high-resolution “murmuration” background with **real boids** (separation, alignment, cohesion), including a **full 3D sim path with optional z mode**, written for **performance + readability + maintainability**, with **modular helpers** (distance/neighbor calc tradeoffs) and a **shape influence system** that later supports morphing into icons/logos with fuzz.
 
 ---
 
@@ -10,7 +10,8 @@ Goal: a lightweight, high-resolution “murmuration” background with **real bo
 - [x] Task 1 — Data Model + Public API Contracts
 - [x] Task 2 — Pixi WebGL Renderer Skeleton
 - [x] Task 3 — Neighbor Search Module
-- [ ] Task 4 — Real Boids Forces
+- [x] Task 4 — Real Boids Forces
+- [x] Task 4B — Full 3D Boids Core (Optional z Mode)
 - [ ] Task 5 — Accuracy vs Compute Swappability
 - [ ] Task 6 — JS/WASM Interop + Render Loop
 - [ ] Task 7 — Shape Influence System
@@ -193,6 +194,45 @@ Goal: a lightweight, high-resolution “murmuration” background with **real bo
 
 ---
 
+## Task 4B — Full 3D Boids Core (Optional z Mode)
+
+### Reasoning Hint
+- Recommended model level: **High**.
+- Switch to **Medium** after API/buffer boundaries are locked and z behavior is stable, for plumbing + tests.
+
+### Deliverables
+- True 3D boids simulation path (`x,y,z` + `vx,vy,vz`) that remains optional at runtime
+- Stable WASM boundary that keeps current XY render path working while exposing depth safely
+- Renderer integration path that can consume z without forcing all themes/shapes to change at once
+
+### Steps
+1. Extend sim state to 3D SoA (Rust):
+   - add `pos_z`, `vel_z`, `accel_z` buffers with zero per-step allocations
+   - initialize z deterministically from seed in normalized range
+2. Add z-mode config/input surface:
+   - runtime toggle (`enable_z` or equivalent)
+   - z behavior controls (`z_weight`, `z_min`, `z_max`, wrap/bounce choice)
+3. Extend boids force evaluation to 3D:
+   - neighbor broad phase can remain XY grid for now
+   - narrow phase distance/steering uses full xyz deltas when z mode is enabled
+   - if z mode is disabled, preserve existing 2D behavior
+4. Integrate and clamp in 3D:
+   - update `vz`, apply speed/max-force constraints coherently in 3D
+   - document z bounds behavior (wrap or bounce) and keep it configurable
+5. Preserve stable external data contract:
+   - keep `render_xy_ptr()` path stable for compatibility
+   - expose depth via an additive API (`render_z_ptr()`/`render_z_len()` or equivalent)
+   - JS must still avoid direct reads of internal SoA buffers
+6. Update TS wrapper + renderer contract:
+   - optional z view creation and safe memory-buffer refresh handling
+   - renderer can ignore z when disabled and consume it when enabled
+7. Add invariants/tests:
+   - no NaN/Inf in z state
+   - z bounds invariants respected
+   - 2D mode parity tests to prevent regressions
+
+---
+
 ## Task 5 — Accuracy vs Compute Swappability (Distance + Math Helpers)
 
 ### Reasoning Hint
@@ -356,13 +396,13 @@ Steps
 1. Add a compile-time “background mode” preset (no UI)
 2. Optionally add a hidden debug panel (dev-only) to tune weights/radii
 
-### 10B — “3D” Depth Illusion (Recommended Nice-to-Have)
+### 10B — 3D Visual Polish (Recommended Nice-to-Have)
 Steps
-1. Add per-bird `z` scalar (0..1) updated slowly (noise or orbit)
-2. Render size and alpha based on z:
+1. Refine existing z rendering curves (size/alpha/tint) for subtle depth
+2. Add optional depth-aware effects:
    - far birds smaller/dimmer
    - near birds larger/brighter
-3. Optionally parallax pointer influence by depth
+3. Optionally add z-aware pointer parallax and fog falloff (theme-compatible)
 
 ### 10C — Bird Shapes (Chevrons / Triangles) Instead of Dots
 Steps
@@ -381,6 +421,7 @@ Steps
 - [ ] Rust WASM sim + Pixi WebGL rendering
 - [ ] Modular math helpers to trade accuracy vs compute
 - [ ] Maintainable structure (clear modules, stable API)
+- [ ] Full 3D boids path with optional z mode (without breaking 2D path)
 - [ ] Shape influence system with simple schema + fuzzy morph
 - [ ] Easy theming (colors/opacity/background polish)
 
@@ -397,9 +438,10 @@ Steps
 3. Task 2 — Pixi WebGL Renderer Skeleton
 4. Task 3 — Neighbor Search Module
 5. Task 4 — Real Boids Forces
-6. Task 5 — Accuracy vs Compute Swappability
-7. Task 6 — JS/WASM Interop + Render Loop
-8. Task 7 — Shape Influence System
-9. Task 8 — Styling/Theming System
-10. Task 9 — Performance Tuning Pass
-11. Task 10 — Nice-to-Haves
+6. Task 4B — Full 3D Boids Core (Optional z Mode)
+7. Task 5 — Accuracy vs Compute Swappability
+8. Task 6 — JS/WASM Interop + Render Loop
+9. Task 7 — Shape Influence System
+10. Task 8 — Styling/Theming System
+11. Task 9 — Performance Tuning Pass
+12. Task 10 — Nice-to-Haves

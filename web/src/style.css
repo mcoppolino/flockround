@@ -27,3 +27,32 @@ body {
   height: 100vh;
   height: 100dvh;
 }
+
+.debug-controls {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 20;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  max-width: calc(100vw - 16px);
+}
+
+.debug-button {
+  appearance: none;
+  height: 20px;
+  border: 1px solid rgba(187, 208, 234, 0.42);
+  border-radius: 4px;
+  background: rgba(8, 12, 20, 0.72);
+  color: #d6e5fb;
+  font: 500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  letter-spacing: 0.01em;
+  padding: 0 6px;
+  cursor: pointer;
+}
+
+.debug-button:hover {
+  background: rgba(19, 28, 46, 0.82);
+}

@@ -34,6 +34,11 @@ impl NeighborGrid {
         grid
     }
 
+    pub fn set_cell_size(&mut self, cell_size: f32) {
+        self.cell_size = cell_size.max(MIN_CELL_SIZE);
+        self.ensure_layout(self.particle_count, self.width, self.height);
+    }
+
     pub fn rebuild(&mut self, positions_x: &[f32], positions_y: &[f32], width: f32, height: f32) {
         assert_eq!(positions_x.len(), positions_y.len());
 
@@ -58,8 +63,15 @@ impl NeighborGrid {
         }
     }
 
-    pub fn for_each_neighbor<F>(&self, i: usize, radius: f32, mut callback: F)
-    where
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_each_neighbor_with_wrap<F>(
+        &self,
+        i: usize,
+        radius: f32,
+        wrap_x: bool,
+        wrap_y: bool,
+        mut callback: F,
+    ) where
         F: FnMut(usize),
     {
         if i >= self.particle_count || self.particle_count == 0 {
@@ -72,29 +84,81 @@ impl NeighborGrid {
 
         let x = self.cached_x[i];
         let y = self.cached_y[i];
-        let cell_x = self.cell_x(x);
-        let cell_y = self.cell_y(y);
+        let base_cell_x = self.cell_x(x);
+        let base_cell_y = self.cell_y(y);
 
-        let min_x = (cell_x - cell_radius).max(0);
-        let max_x = (cell_x + cell_radius).min(self.cols as isize - 1);
-        let min_y = (cell_y - cell_radius).max(0);
-        let max_y = (cell_y + cell_radius).min(self.rows as isize - 1);
+        let min_y = (base_cell_y - cell_radius).max(0);
+        let max_y = (base_cell_y + cell_radius).min(self.rows as isize - 1);
+        let min_x = (base_cell_x - cell_radius).max(0);
+        let max_x = (base_cell_x + cell_radius).min(self.cols as isize - 1);
 
-        for cy in min_y..=max_y {
-            for cx in min_x..=max_x {
-                let cell_index = cy as usize * self.cols + cx as usize;
-                let mut candidate = self.head[cell_index];
+        if wrap_y {
+            for y_offset in -cell_radius..=cell_radius {
+                let cell_y = wrap_cell_index(base_cell_y + y_offset, self.rows);
 
-                while candidate != INVALID_INDEX {
-                    if candidate != i {
-                        let dx = self.cached_x[candidate] - x;
-                        let dy = self.cached_y[candidate] - y;
-                        if dx * dx + dy * dy <= radius_sq {
-                            callback(candidate);
-                        }
+                if wrap_x {
+                    for x_offset in -cell_radius..=cell_radius {
+                        let cell_x = wrap_cell_index(base_cell_x + x_offset, self.cols);
+                        self.scan_cell(
+                            cell_x,
+                            cell_y,
+                            i,
+                            x,
+                            y,
+                            radius_sq,
+                            wrap_x,
+                            wrap_y,
+                            &mut callback,
+                        );
                     }
+                } else {
+                    for cell_x in min_x..=max_x {
+                        self.scan_cell(
+                            cell_x as usize,
+                            cell_y,
+                            i,
+                            x,
+                            y,
+                            radius_sq,
+                            wrap_x,
+                            wrap_y,
+                            &mut callback,
+                        );
+                    }
+                }
+            }
+            return;
+        }
 
-                    candidate = self.next[candidate];
+        for cell_y in min_y..=max_y {
+            if wrap_x {
+                for x_offset in -cell_radius..=cell_radius {
+                    let cell_x = wrap_cell_index(base_cell_x + x_offset, self.cols);
+                    self.scan_cell(
+                        cell_x,
+                        cell_y as usize,
+                        i,
+                        x,
+                        y,
+                        radius_sq,
+                        wrap_x,
+                        wrap_y,
+                        &mut callback,
+                    );
+                }
+            } else {
+                for cell_x in min_x..=max_x {
+                    self.scan_cell(
+                        cell_x as usize,
+                        cell_y as usize,
+                        i,
+                        x,
+                        y,
+                        radius_sq,
+                        wrap_x,
+                        wrap_y,
+                        &mut callback,
+                    );
                 }
             }
         }
@@ -135,6 +199,62 @@ impl NeighborGrid {
     fn cell_y(&self, y: f32) -> isize {
         ((y / self.cell_size).floor() as isize).clamp(0, self.rows as isize - 1)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn scan_cell<F>(
+        &self,
+        cell_x: usize,
+        cell_y: usize,
+        i: usize,
+        x: f32,
+        y: f32,
+        radius_sq: f32,
+        wrap_x: bool,
+        wrap_y: bool,
+        callback: &mut F,
+    ) where
+        F: FnMut(usize),
+    {
+        let cell_index = cell_y * self.cols + cell_x;
+        let mut candidate = self.head[cell_index];
+
+        while candidate != INVALID_INDEX {
+            if candidate != i {
+                let raw_dx = self.cached_x[candidate] - x;
+                let raw_dy = self.cached_y[candidate] - y;
+                let dx = if wrap_x {
+                    wrapped_delta(raw_dx, self.width)
+                } else {
+                    raw_dx
+                };
+                let dy = if wrap_y {
+                    wrapped_delta(raw_dy, self.height)
+                } else {
+                    raw_dy
+                };
+                if dx * dx + dy * dy <= radius_sq {
+                    callback(candidate);
+                }
+            }
+
+            candidate = self.next[candidate];
+        }
+    }
+}
+
+fn wrap_cell_index(index: isize, len: usize) -> usize {
+    index.rem_euclid(len as isize) as usize
+}
+
+fn wrapped_delta(delta: f32, world_extent: f32) -> f32 {
+    let half_extent = world_extent * 0.5;
+    if delta > half_extent {
+        delta - world_extent
+    } else if delta < -half_extent {
+        delta + world_extent
+    } else {
+        delta
+    }
 }
 
 #[cfg(test)]
@@ -143,7 +263,7 @@ mod tests {
 
     fn sorted_neighbors(grid: &NeighborGrid, i: usize, radius: f32) -> Vec<usize> {
         let mut neighbors = Vec::new();
-        grid.for_each_neighbor(i, radius, |j| neighbors.push(j));
+        grid.for_each_neighbor_with_wrap(i, radius, true, true, |j| neighbors.push(j));
         neighbors.sort_unstable();
         neighbors
     }

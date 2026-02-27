@@ -4,13 +4,27 @@ import initWasm, {
   wasm_loaded_message,
 } from "../../sim-wasm/pkg/sim_wasm.js";
 
+export interface SimBoidsConfig {
+  sepWeight: number;
+  alignWeight: number;
+  cohWeight: number;
+  neighborRadius: number;
+  separationRadius: number;
+  minSpeed: number;
+  maxSpeed: number;
+  maxForce: number;
+}
+
 export class WasmSimClient {
   private readonly sim: Sim;
   private readonly wasmMemory: WebAssembly.Memory;
   private positionsView: Float32Array;
+  private depthView: Float32Array;
   private memoryBuffer: ArrayBuffer;
-  private readonly pointer: number;
-  private readonly length: number;
+  private readonly positionsPointer: number;
+  private readonly positionsLength: number;
+  private readonly depthPointer: number;
+  private readonly depthLength: number;
 
   constructor(
     count: number,
@@ -21,13 +35,20 @@ export class WasmSimClient {
   ) {
     this.sim = new Sim(count, seed, width, height);
     this.wasmMemory = wasmMemory;
-    this.pointer = this.sim.render_xy_ptr();
-    this.length = this.sim.render_xy_len();
+    this.positionsPointer = this.sim.render_xy_ptr();
+    this.positionsLength = this.sim.render_xy_len();
+    this.depthPointer = this.sim.render_z_ptr();
+    this.depthLength = this.sim.render_z_len();
     this.memoryBuffer = wasmMemory.buffer;
     this.positionsView = new Float32Array(
       this.memoryBuffer,
-      this.pointer,
-      this.length,
+      this.positionsPointer,
+      this.positionsLength,
+    );
+    this.depthView = new Float32Array(
+      this.memoryBuffer,
+      this.depthPointer,
+      this.depthLength,
     );
   }
 
@@ -36,8 +57,57 @@ export class WasmSimClient {
     this.refreshViewIfMemoryChanged();
   }
 
+  setConfig(config: SimBoidsConfig): void {
+    this.sim.set_config(
+      config.sepWeight,
+      config.alignWeight,
+      config.cohWeight,
+      config.neighborRadius,
+      config.separationRadius,
+      config.minSpeed,
+      config.maxSpeed,
+      config.maxForce,
+    );
+  }
+
   setBounds(width: number, height: number): void {
     this.sim.set_bounds(width, height);
+  }
+
+  setBounceBounds(enabled: boolean): void {
+    this.sim.set_bounce_bounds(enabled);
+  }
+
+  isBounceBoundsEnabled(): boolean {
+    return this.sim.bounce_bounds();
+  }
+
+  setAxisBounce(bounceX: boolean, bounceY: boolean, bounceZ: boolean): void {
+    this.sim.set_axis_bounce(bounceX, bounceY, bounceZ);
+  }
+
+  isBounceXEnabled(): boolean {
+    return this.sim.bounce_x();
+  }
+
+  isBounceYEnabled(): boolean {
+    return this.sim.bounce_y();
+  }
+
+  isBounceZEnabled(): boolean {
+    return this.sim.bounce_z();
+  }
+
+  setZMode(enabled: boolean): void {
+    this.sim.set_z_mode(enabled);
+  }
+
+  isZModeEnabled(): boolean {
+    return this.sim.z_mode_enabled();
+  }
+
+  setZForceScale(scale: number): void {
+    this.sim.set_z_force_scale(scale);
   }
 
   getCount(): number {
@@ -49,8 +119,17 @@ export class WasmSimClient {
     return this.positionsView;
   }
 
+  getDepth(): Float32Array {
+    this.refreshViewIfMemoryChanged();
+    return this.depthView;
+  }
+
   getPointer(): number {
-    return this.pointer;
+    return this.positionsPointer;
+  }
+
+  getDepthPointer(): number {
+    return this.depthPointer;
   }
 
   private refreshViewIfMemoryChanged(): void {
@@ -61,8 +140,13 @@ export class WasmSimClient {
     this.memoryBuffer = this.wasmMemory.buffer;
     this.positionsView = new Float32Array(
       this.memoryBuffer,
-      this.pointer,
-      this.length,
+      this.positionsPointer,
+      this.positionsLength,
+    );
+    this.depthView = new Float32Array(
+      this.memoryBuffer,
+      this.depthPointer,
+      this.depthLength,
     );
   }
 }
@@ -75,6 +159,7 @@ export async function initWasmModule(): Promise<WasmSimClient> {
   console.log("Sim ready", {
     count: sim.getCount(),
     ptr: sim.getPointer(),
+    depthPtr: sim.getDepthPointer(),
   });
 
   return sim;

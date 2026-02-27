@@ -3,7 +3,7 @@ You are implementing a modular boids simulation project (“flockround”) with:
 - TypeScript + Vite for web app
 - PixiJS WebGL for rendering
 Requirements:
-- Real boids (separation, alignment, cohesion) with neighbor search (uniform grid)
+- Real boids (separation, alignment, cohesion) with neighbor search (uniform grid) and a full 3D mode with optional z
 - Modular helpers to swap accuracy vs compute (distance calc, normalize, inv sqrt, neighbor sampling cap)
 - Shape influence system: easy schema for simple shapes; birds can flock to shapes with fuzz; later morph targets
 - Easy theming: color schemes, opacity, blending; suitable as a portfolio background
@@ -49,7 +49,7 @@ Implement:
   - rustfmt + clippy (document commands)
   - eslint + prettier for TS (minimal rules)
 - Create TODO.md with all tasks (unchecked initially) reflecting the plan:
-  0 Tooling, 1 API contracts, 2 Pixi renderer, 3 neighbor grid, 4 boids, 5 modular math, 6 render loop, 7 shapes, 8 theming, 9 perf pass, 10 nice-to-haves.
+  0 Tooling, 1 API contracts, 2 Pixi renderer, 3 neighbor grid, 4 boids, 4B full-3D optional-z core, 5 modular math, 6 render loop, 7 shapes, 8 theming, 9 perf pass, 10 nice-to-haves.
 - Add README.md with minimal instructions.
 
 Acceptance:
@@ -183,6 +183,43 @@ Output:
 
 
 ========================
+PROMPT 5B — Full 3D boids core (optional z mode)
+========================
+Task: Extend the simulation to a true 3D boids path while keeping the existing 2D contract stable.
+
+Implement:
+- In `sim-wasm`:
+  - add SoA z buffers (`pos_z`, `vel_z`, `accel_z`) with no per-step allocations
+  - add runtime config toggle(s) for z mode (`enable_z` + z bounds/weight controls)
+  - update boids force + integration to operate in xyz when z mode is enabled
+  - preserve current 2D behavior when z mode is disabled
+- Keep neighbor broad phase maintainable:
+  - keep the current XY grid as broad phase
+  - do 3D distance checks in narrow phase when z mode is on
+- WASM API boundary:
+  - keep `render_xy_ptr()` stable for compatibility
+  - add an additive depth API (`render_z_ptr()` + `render_z_len()` or equivalent)
+- In `web`:
+  - extend WASM wrapper to create/reuse optional z typed-array view
+  - renderer can consume z when enabled and ignore it when disabled
+- Add invariants/tests:
+  - no NaN/Inf in z buffers
+  - z bounds respected
+  - 2D parity check when z mode is off
+
+Acceptance:
+- With z mode enabled, flock dynamics and depth channel update in 3D.
+- With z mode disabled, behavior remains effectively the prior 2D baseline.
+- No per-frame allocations in TS or Rust step loop.
+
+Output:
+- Files changed + explanation
+- Patches
+- Update TODO.md (mark Task 4B complete)
+- Any API compatibility notes
+
+
+========================
 PROMPT 6 — Pluggable “accuracy vs compute” helpers
 ========================
 Task: Add modular helpers to trade accuracy vs performance for distance/normalize and neighbor sampling.
@@ -282,7 +319,7 @@ Implement:
   - particle color(s)
   - particle alpha
   - blend mode
-  - optional depth-based tint hook (stub for later)
+  - optional z-aware tint hook (consumes depth when enabled)
 - Renderer supports:
   - switching themes at runtime
   - a few built-in presets (e.g. Night Sky, Fog, High Contrast)
@@ -328,13 +365,13 @@ Output:
 
 
 ========================
-PROMPT 11 — Nice-to-haves (depth illusion + bird shapes with LOD)
+PROMPT 11 — Nice-to-haves (3D polish + bird shapes with LOD)
 ========================
 Task: Implement optional nice-to-haves incrementally, behind flags.
 
-10B Depth illusion:
-- Add per-boid depth scalar z (0..1), updated slowly.
-- Renderer uses z to scale point size and alpha.
+10B 3D polish:
+- Use existing z channel to tune size/alpha/tint curves.
+- Optionally add subtle z-aware parallax/fog.
 - Keep it subtle and theme-compatible.
 
 10C Bird shapes:
@@ -343,7 +380,7 @@ Task: Implement optional nice-to-haves incrementally, behind flags.
 - Must remain batched; no DisplayObject-per-bird.
 
 Acceptance:
-- Depth adds “3D” feel.
+- 3D polish improves depth perception without destabilizing the sim.
 - Bird shapes don’t tank performance.
 
 Output:

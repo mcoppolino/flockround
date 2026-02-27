@@ -86,7 +86,7 @@ export class FlockView {
     this.app.render();
   }
 
-  render(positions: Float32Array): void {
+  render(positions: Float32Array, depth?: Float32Array): void {
     const nextCount = positions.length >>> 1;
     if (!this.mesh || nextCount !== this.particleCount) {
       this.rebuildMesh(nextCount);
@@ -99,13 +99,16 @@ export class FlockView {
 
     const width = this.app.screen.width * this.renderScale;
     const height = this.app.screen.height * this.renderScale;
-    const halfSize = this.theme.particleSize * 0.5;
+    const hasDepth = Boolean(depth) && (depth?.length ?? 0) >= nextCount;
+    const baseHalfSize = this.theme.particleSize * 0.5;
 
     for (let i = 0; i < nextCount; i += 1) {
       const p = i * 2;
       const x = positions[p] * width;
       const y = positions[p + 1] * height;
       const v = i * 8;
+      const z = hasDepth ? clamp01(depth![i]) : DEFAULT_Z_LAYER;
+      const halfSize = baseHalfSize * (0.55 + 0.9 * z);
 
       this.vertices[v] = x - halfSize;
       this.vertices[v + 1] = y - halfSize;
@@ -221,4 +224,16 @@ export class FlockView {
 
     return Texture.from(canvas);
   }
+}
+
+const DEFAULT_Z_LAYER = 0.5;
+
+function clamp01(value: number): number {
+  if (value <= 0) {
+    return 0;
+  }
+  if (value >= 1) {
+    return 1;
+  }
+  return value;
 }
