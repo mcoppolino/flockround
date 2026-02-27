@@ -12,7 +12,7 @@ Goal: a lightweight, high-resolution “murmuration” background with **real bo
 - [x] Task 3 — Neighbor Search Module
 - [x] Task 4 — Real Boids Forces
 - [x] Task 4B — Full 3D Boids Core (Optional z Mode)
-- [ ] Task 5 — Accuracy vs Compute Swappability
+- [x] Task 5 — Accuracy vs Compute Swappability
 - [ ] Task 6 — JS/WASM Interop + Render Loop
 - [ ] Task 7 — Shape Influence System
 - [ ] Task 8 — Styling/Theming System

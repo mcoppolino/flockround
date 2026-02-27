@@ -23,6 +23,11 @@ declare module "../../sim-wasm/pkg/sim_wasm.js" {
     bounce_x(): boolean;
     bounce_y(): boolean;
     bounce_z(): boolean;
+    set_math_mode(mode: number): void;
+    math_mode(): number;
+    set_max_neighbors_sampled(maxNeighbors: number): void;
+    max_neighbors_sampled(): number;
+    neighbors_visited_last_step(): number;
     set_z_mode(enabled: boolean): void;
     z_mode_enabled(): boolean;
     set_z_force_scale(scale: number): void;

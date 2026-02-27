@@ -13,7 +13,11 @@ export interface SimBoidsConfig {
   minSpeed: number;
   maxSpeed: number;
   maxForce: number;
+  mathMode?: SimMathMode;
+  maxNeighborsSampled?: number;
 }
+
+export type SimMathMode = "accurate" | "fast";
 
 export class WasmSimClient {
   private readonly sim: Sim;
@@ -68,6 +72,13 @@ export class WasmSimClient {
       config.maxSpeed,
       config.maxForce,
     );
+
+    if (config.mathMode) {
+      this.setMathMode(config.mathMode);
+    }
+    if (config.maxNeighborsSampled !== undefined) {
+      this.setMaxNeighborsSampled(config.maxNeighborsSampled);
+    }
   }
 
   setBounds(width: number, height: number): void {
@@ -96,6 +107,26 @@ export class WasmSimClient {
 
   isBounceZEnabled(): boolean {
     return this.sim.bounce_z();
+  }
+
+  setMathMode(mode: SimMathMode): void {
+    this.sim.set_math_mode(mode === "fast" ? 1 : 0);
+  }
+
+  getMathMode(): SimMathMode {
+    return this.sim.math_mode() === 1 ? "fast" : "accurate";
+  }
+
+  setMaxNeighborsSampled(maxNeighbors: number): void {
+    this.sim.set_max_neighbors_sampled(Math.max(0, Math.floor(maxNeighbors)));
+  }
+
+  getMaxNeighborsSampled(): number {
+    return this.sim.max_neighbors_sampled();
+  }
+
+  getNeighborsVisitedLastStep(): number {
+    return this.sim.neighbors_visited_last_step();
   }
 
   setZMode(enabled: boolean): void {

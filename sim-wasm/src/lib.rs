@@ -1,5 +1,7 @@
+mod math;
 mod neighbor_grid;
 
+use math::MathMode;
 use neighbor_grid::NeighborGrid;
 use std::f32::consts::TAU;
 use wasm_bindgen::prelude::*;
@@ -56,6 +58,8 @@ struct SimConfig {
     min_speed: f32,
     max_speed: f32,
     max_force: f32,
+    math_mode: MathMode,
+    max_neighbors_sampled: usize,
 }
 
 impl Default for SimConfig {
@@ -69,6 +73,8 @@ impl Default for SimConfig {
             min_speed: 0.045,
             max_speed: 0.19,
             max_force: 0.42,
+            math_mode: MathMode::Accurate,
+            max_neighbors_sampled: 0,
         }
     }
 }
@@ -128,6 +134,7 @@ pub struct Sim {
     render_xy: Vec<f32>,
     render_z: Vec<f32>,
     neighbor_grid: NeighborGrid,
+    neighbors_visited_last_step: usize,
 }
 
 #[wasm_bindgen]
@@ -187,6 +194,7 @@ impl Sim {
             render_xy,
             render_z,
             neighbor_grid: NeighborGrid::new(count, WORLD_SIZE, WORLD_SIZE, config.neighbor_radius),
+            neighbors_visited_last_step: 0,
         }
     }
 
@@ -211,6 +219,8 @@ impl Sim {
             min_speed,
             max_speed,
             max_force,
+            math_mode: self.config.math_mode,
+            max_neighbors_sampled: self.config.max_neighbors_sampled,
         };
         self.config.sanitize();
 
@@ -277,11 +287,34 @@ impl Sim {
         self.bounce_z
     }
 
+    pub fn set_math_mode(&mut self, mode: u32) {
+        self.config.math_mode = MathMode::from_u32(mode);
+    }
+
+    pub fn math_mode(&self) -> u32 {
+        self.config.math_mode.as_u32()
+    }
+
+    pub fn set_max_neighbors_sampled(&mut self, max_neighbors: usize) {
+        self.config.max_neighbors_sampled = max_neighbors;
+    }
+
+    pub fn max_neighbors_sampled(&self) -> usize {
+        self.config.max_neighbors_sampled
+    }
+
+    pub fn neighbors_visited_last_step(&self) -> usize {
+        self.neighbors_visited_last_step
+    }
+
     pub fn step(&mut self, dt: f32) {
         let dt = dt.clamp(DT_MIN, DT_MAX);
         if dt <= 0.0 || self.count == 0 {
+            self.neighbors_visited_last_step = 0;
             return;
         }
+
+        self.neighbors_visited_last_step = 0;
 
         self.neighbor_grid
             .set_cell_size(self.config.neighbor_radius);
@@ -289,10 +322,11 @@ impl Sim {
             .rebuild(&self.pos_x, &self.pos_y, WORLD_SIZE, WORLD_SIZE);
 
         for i in 0..self.count {
-            let (ax, ay, az) = self.compute_boids_acceleration(i);
+            let (ax, ay, az, neighbors_used) = self.compute_boids_acceleration(i);
             self.accel_x[i] = ax;
             self.accel_y[i] = ay;
             self.accel_z[i] = az;
+            self.neighbors_visited_last_step += neighbors_used;
         }
 
         for i in 0..self.count {
@@ -317,20 +351,33 @@ impl Sim {
                     vz = 0.0;
                 }
             } else {
-                let speed = speed_sq.sqrt();
-                if speed < self.config.min_speed {
-                    let scale = self.config.min_speed / speed;
-                    vx *= scale;
-                    vy *= scale;
+                let min_speed_sq = self.config.min_speed * self.config.min_speed;
+                let max_speed_sq = self.config.max_speed * self.config.max_speed;
+                if speed_sq < min_speed_sq {
+                    let (nvx, nvy, nvz) = math::normalize_to_magnitude(
+                        self.config.math_mode,
+                        vx,
+                        vy,
+                        if self.z_mode_enabled { vz } else { 0.0 },
+                        self.config.min_speed,
+                    );
+                    vx = nvx;
+                    vy = nvy;
                     if self.z_mode_enabled {
-                        vz *= scale;
+                        vz = nvz;
                     }
-                } else if speed > self.config.max_speed {
-                    let scale = self.config.max_speed / speed;
-                    vx *= scale;
-                    vy *= scale;
+                } else if speed_sq > max_speed_sq {
+                    let (nvx, nvy, nvz) = math::normalize_to_magnitude(
+                        self.config.math_mode,
+                        vx,
+                        vy,
+                        if self.z_mode_enabled { vz } else { 0.0 },
+                        self.config.max_speed,
+                    );
+                    vx = nvx;
+                    vy = nvy;
                     if self.z_mode_enabled {
-                        vz *= scale;
+                        vz = nvz;
                     }
                 }
             }
@@ -386,7 +433,7 @@ impl Sim {
 }
 
 impl Sim {
-    fn compute_boids_acceleration(&self, i: usize) -> (f32, f32, f32) {
+    fn compute_boids_acceleration(&self, i: usize) -> (f32, f32, f32, usize) {
         let wrap_x = !self.bounce_x;
         let wrap_y = !self.bounce_y;
         let wrap_z = !self.bounce_z;
@@ -428,9 +475,15 @@ impl Sim {
                 } else {
                     0.0
                 };
-                let dist_sq = dx * dx + dy * dy + dz * dz;
+                let dist_sq = math::distance_sq_3d(dx, dy, dz);
 
                 if dist_sq <= EPSILON || dist_sq > neighbor_radius_sq {
+                    return;
+                }
+
+                if self.config.max_neighbors_sampled > 0
+                    && neighbor_count >= self.config.max_neighbors_sampled
+                {
                     return;
                 }
 
@@ -464,6 +517,7 @@ impl Sim {
         if sep_count > 0 {
             let n = sep_count as f32;
             let (steer_x, steer_y, steer_z) = steer_towards_3d(
+                self.config.math_mode,
                 sep_x / n,
                 sep_y / n,
                 sep_z / n,
@@ -481,6 +535,7 @@ impl Sim {
             let n = neighbor_count as f32;
 
             let (align_force_x, align_force_y, align_force_z) = steer_towards_3d(
+                self.config.math_mode,
                 align_x / n,
                 align_y / n,
                 align_z / n,
@@ -494,6 +549,7 @@ impl Sim {
             force_z += align_force_z * self.config.align_weight * self.z_force_scale;
 
             let (coh_force_x, coh_force_y, coh_force_z) = steer_towards_3d(
+                self.config.math_mode,
                 coh_x / n,
                 coh_y / n,
                 coh_z / n,
@@ -511,7 +567,15 @@ impl Sim {
             force_z = 0.0;
         }
 
-        limit_magnitude_3d(force_x, force_y, force_z, self.config.max_force)
+        let (fx, fy, fz) = math::limit_magnitude_3d(
+            self.config.math_mode,
+            force_x,
+            force_y,
+            force_z,
+            self.config.max_force,
+        );
+
+        (fx, fy, fz, neighbor_count)
     }
 
     fn debug_validate_state(&self) {
@@ -584,6 +648,7 @@ fn integrate_axis(position: f32, velocity: f32, dt: f32, bounce: bool) -> (f32, 
 
 #[allow(clippy::too_many_arguments)]
 fn steer_towards_3d(
+    mode: MathMode,
     desired_x: f32,
     desired_y: f32,
     desired_z: f32,
@@ -592,38 +657,14 @@ fn steer_towards_3d(
     current_vz: f32,
     max_speed: f32,
 ) -> (f32, f32, f32) {
-    let desired_mag_sq = desired_x * desired_x + desired_y * desired_y + desired_z * desired_z;
-    if desired_mag_sq <= EPSILON {
-        return (0.0, 0.0, 0.0);
-    }
-
-    let desired_mag = desired_mag_sq.sqrt();
-    let scale = max_speed / desired_mag;
-    let target_x = desired_x * scale;
-    let target_y = desired_y * scale;
-    let target_z = desired_z * scale;
+    let (target_x, target_y, target_z) =
+        math::normalize_to_magnitude(mode, desired_x, desired_y, desired_z, max_speed);
 
     (
         target_x - current_vx,
         target_y - current_vy,
         target_z - current_vz,
     )
-}
-
-fn limit_magnitude_3d(x: f32, y: f32, z: f32, max_magnitude: f32) -> (f32, f32, f32) {
-    if max_magnitude <= 0.0 {
-        return (0.0, 0.0, 0.0);
-    }
-
-    let mag_sq = x * x + y * y + z * z;
-    let max_sq = max_magnitude * max_magnitude;
-
-    if mag_sq <= max_sq {
-        return (x, y, z);
-    }
-
-    let scale = max_magnitude / mag_sq.sqrt();
-    (x * scale, y * scale, z * scale)
 }
 
 fn clamp_finite(value: f32, min: f32, max: f32, fallback: f32) -> f32 {
@@ -717,5 +758,28 @@ mod tests {
 
         assert!((0.0..=WORLD_SIZE).contains(&sim.pos_z[0]));
         assert!(sim.vel_z[0] > 0.0);
+    }
+
+    #[test]
+    fn fast_math_mode_stays_stable() {
+        let mut sim = Sim::new(128, 99, 1.0, 1.0);
+        sim.set_z_mode(true);
+        sim.set_math_mode(1);
+        sim.step(0.016);
+
+        for i in 0..sim.count() {
+            assert!(sim.pos_x[i].is_finite());
+            assert!(sim.pos_y[i].is_finite());
+            assert!(sim.pos_z[i].is_finite());
+        }
+    }
+
+    #[test]
+    fn neighbor_sampling_cap_limits_work() {
+        let mut sim = Sim::new(256, 2026, 1.0, 1.0);
+        sim.set_max_neighbors_sampled(2);
+        sim.step(0.016);
+
+        assert!(sim.neighbors_visited_last_step() <= sim.count() * 2);
     }
 }
