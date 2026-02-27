@@ -7,7 +7,7 @@ Goal: a lightweight, high-resolution “murmuration” background with **real bo
 ## Task Status
 
 - [x] Task 0 — Repo + Tooling Baseline
-- [ ] Task 1 — Data Model + Public API Contracts
+- [x] Task 1 — Data Model + Public API Contracts
 - [ ] Task 2 — Pixi WebGL Renderer Skeleton
 - [ ] Task 3 — Neighbor Search Module
 - [ ] Task 4 — Real Boids Forces
