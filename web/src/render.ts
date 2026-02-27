@@ -18,11 +18,12 @@ export interface FlockViewOptions {
 const UVS_PER_PARTICLE = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]);
 
 export const DEFAULT_FLOCK_THEME: FlockTheme = {
-  backgroundColor: 0x04070d,
-  backgroundAlpha: 1.0,
-  particleColor: 0xcfe7ff,
-  particleAlpha: 0.72,
-  blendMode: "add",
+  // Keep renderer transparent so CSS owns the warm gradient backdrop.
+  backgroundColor: 0x000000,
+  backgroundAlpha: 0.0,
+  particleColor: 0xf3e6d4,
+  particleAlpha: 0.92,
+  blendMode: "normal",
   particleSize: 2.4,
 };
 

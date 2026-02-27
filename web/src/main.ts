@@ -1,4 +1,4 @@
-import { DEFAULT_FLOCK_THEME, FlockView } from "./render";
+import { DEFAULT_FLOCK_THEME, FlockView, type FlockTheme } from "./render";
 import { initWasmModule, type SimMathMode } from "./wasm";
 import "./style.css";
 
@@ -14,16 +14,71 @@ const DEFAULT_Z_ENABLED = true;
 const DEFAULT_BOUNCE_X = false;
 const DEFAULT_BOUNCE_Y = false;
 const DEFAULT_BOUNCE_Z = true;
-const DEFAULT_MATH_MODE: SimMathMode = "fast";
-const DEFAULT_NEIGHBOR_CAP = 24;
+const DEFAULT_MATH_MODE: SimMathMode = "accurate";
+const DEFAULT_NEIGHBOR_CAP = 48;
 const DEFAULT_RENDER_STRIDE = 1;
 const DEFAULT_PROFILE_ENABLED = true;
-const DEFAULT_MAX_FORCE = 0.2;
-const DEFAULT_DRAG = 1.2;
-const DEFAULT_MIN_DISTANCE = 0.3;
-const DEFAULT_HARD_MIN_DISTANCE = 0.01;
-const DEFAULT_JITTER_STRENGTH = 0.4;
-const DEFAULT_ACTIVE_BIRDS = 5_000;
+const DEFAULT_MAX_FORCE = 0.15;
+const DEFAULT_DRAG = 0.09;
+const DEFAULT_MIN_DISTANCE = 0.5;
+const DEFAULT_HARD_MIN_DISTANCE = 0.02;
+const DEFAULT_JITTER_STRENGTH = 0.6;
+const DEFAULT_ACTIVE_BIRDS = 4_200;
+
+type PaletteSpec = {
+  gradientStart: string;
+  gradientMiddle: string;
+  gradientEnd: string;
+  particleColor: number;
+  particleAlpha: number;
+};
+
+const DEFAULT_PALETTE: PaletteSpec = {
+  gradientStart: "#4a3b2d",
+  gradientMiddle: "#2e251d",
+  gradientEnd: "#14100d",
+  particleColor: 0xf3e6d4,
+  particleAlpha: 0.92,
+};
+
+const RANDOM_PALETTES: PaletteSpec[] = [
+  DEFAULT_PALETTE,
+  {
+    gradientStart: "#3f2d24",
+    gradientMiddle: "#271d18",
+    gradientEnd: "#120d0a",
+    particleColor: 0xf2ddc6,
+    particleAlpha: 0.92,
+  },
+  {
+    gradientStart: "#2f3427",
+    gradientMiddle: "#1f2319",
+    gradientEnd: "#0f120c",
+    particleColor: 0xe7edd9,
+    particleAlpha: 0.9,
+  },
+  {
+    gradientStart: "#2f313f",
+    gradientMiddle: "#1d1f2a",
+    gradientEnd: "#0d0e13",
+    particleColor: 0xe3e8f5,
+    particleAlpha: 0.9,
+  },
+  {
+    gradientStart: "#3f2f35",
+    gradientMiddle: "#281d22",
+    gradientEnd: "#120d0f",
+    particleColor: 0xf0dfe4,
+    particleAlpha: 0.9,
+  },
+  {
+    gradientStart: "#373127",
+    gradientMiddle: "#231f18",
+    gradientEnd: "#12100c",
+    particleColor: 0xefe7d5,
+    particleAlpha: 0.92,
+  },
+];
 
 function sliderIndexToNeighborCap(index: number): number {
   const clampedIndex = Math.min(K_SLIDER_MAX_INDEX, Math.max(K_SLIDER_MIN_INDEX, index));
@@ -102,7 +157,17 @@ async function start(): Promise<void> {
     dprCap: 2,
     renderScale: 1,
   });
-  view.setTheme(DEFAULT_FLOCK_THEME);
+  let activePaletteIndex = 0;
+  const applyPalette = (palette: PaletteSpec): void => {
+    setBackgroundGradient(palette);
+    const nextTheme: FlockTheme = {
+      ...DEFAULT_FLOCK_THEME,
+      particleColor: palette.particleColor,
+      particleAlpha: palette.particleAlpha,
+    };
+    view.setTheme(nextTheme);
+  };
+  applyPalette(DEFAULT_PALETTE);
   const controls = createDebugControls(host, totalBoids);
   const profiler = createLoopProfiler(controls.profileStats);
   profiler.setEnabled(profileEnabled);
@@ -240,6 +305,17 @@ async function start(): Promise<void> {
     updateDebugState();
   });
 
+  controls.paletteButton.addEventListener("click", () => {
+    const nextPaletteIndex = pickRandomPaletteIndex(activePaletteIndex, RANDOM_PALETTES.length);
+    activePaletteIndex = nextPaletteIndex;
+    const basePalette = RANDOM_PALETTES[nextPaletteIndex];
+    applyPalette({
+      ...basePalette,
+      particleColor: randomBirdColor(),
+      particleAlpha: 0.86 + Math.random() * 0.1,
+    });
+  });
+
   const applyResize = (): void => {
     const width = Math.floor(window.innerWidth);
     const height = Math.floor(window.innerHeight);
@@ -373,6 +449,7 @@ function createDebugControls(host: HTMLElement, maxBirds: number): {
   zModeButton: HTMLButtonElement;
   mathModeButton: HTMLButtonElement;
   profileButton: HTMLButtonElement;
+  paletteButton: HTMLButtonElement;
   kSlider: HTMLInputElement;
   kValueLabel: HTMLSpanElement;
   birdCountSlider: HTMLInputElement;
@@ -422,10 +499,14 @@ function createDebugControls(host: HTMLElement, maxBirds: number): {
   zBoundsButton.title = "Z-axis boundary mode: Wrap teleports at edges, Bounce reflects velocity.";
   const zModeButton = createDebugButton("Z Mode: On");
   zModeButton.title = "Enable or disable depth simulation (3D movement).";
-  const mathModeButton = createDebugButton("Math: Fast");
+  const mathModeButton = createDebugButton(
+    DEFAULT_MATH_MODE === "fast" ? "Math: Fast" : "Math: Accurate",
+  );
   mathModeButton.title = "Math path for vector ops: Accurate favors precision, Fast favors speed.";
   const profileButton = createDebugButton("Profile: On");
   profileButton.title = "Toggle runtime performance metrics overlay.";
+  const paletteButton = createDebugButton("Palette: Random");
+  paletteButton.title = "Randomize bird tint and background gradient.";
   const defaultActiveBirds = Math.min(maxBirds, DEFAULT_ACTIVE_BIRDS);
   const kSlider = document.createElement("input");
   kSlider.type = "range";
@@ -634,6 +715,7 @@ function createDebugControls(host: HTMLElement, maxBirds: number): {
     "X/Y/Z: axis boundary mode (Wrap or Bounce)",
     "Z Mode: enable depth simulation",
     "Math: vector math mode (Accurate/Fast)",
+    "Palette: randomize bird and background colors",
     "k: neighbors sampled per boid (inf = uncapped)",
     "n: active bird count",
     "f: max steering force clamp",
@@ -651,6 +733,7 @@ function createDebugControls(host: HTMLElement, maxBirds: number): {
     zModeButton,
     mathModeButton,
     profileButton,
+    paletteButton,
   ];
   for (const button of buttons) {
     button.style.height = "20px";
@@ -701,6 +784,7 @@ function createDebugControls(host: HTMLElement, maxBirds: number): {
     zModeButton,
     mathModeButton,
     profileButton,
+    paletteButton,
     kSlider,
     kValueLabel,
     birdCountSlider,
@@ -735,6 +819,72 @@ function setButtonState(button: HTMLButtonElement, active: boolean): void {
     : "rgba(187, 208, 234, 0.65)";
   button.style.background = active ? "rgba(21, 55, 90, 0.95)" : "rgba(6, 10, 18, 0.9)";
   button.style.color = active ? "#ffffff" : "#e6f0ff";
+}
+
+function setBackgroundGradient(palette: PaletteSpec): void {
+  const root = document.documentElement;
+  root.style.setProperty("--bg-stop-0", palette.gradientStart);
+  root.style.setProperty("--bg-stop-1", palette.gradientMiddle);
+  root.style.setProperty("--bg-stop-2", palette.gradientEnd);
+}
+
+function pickRandomPaletteIndex(currentIndex: number, count: number): number {
+  if (count <= 1) {
+    return 0;
+  }
+
+  let nextIndex = currentIndex;
+  while (nextIndex === currentIndex) {
+    nextIndex = Math.floor(Math.random() * count);
+  }
+  return nextIndex;
+}
+
+function randomBirdColor(): number {
+  // Keep birds bright enough to stay readable over dark warm gradients.
+  const hue = Math.random() * 360;
+  const saturation = 0.35 + Math.random() * 0.55;
+  const lightness = 0.72 + Math.random() * 0.2;
+  return hslToRgbNumber(hue, saturation, lightness);
+}
+
+function hslToRgbNumber(hueDegrees: number, saturation: number, lightness: number): number {
+  const h = ((hueDegrees % 360) + 360) % 360;
+  const s = clamp01(saturation);
+  const l = clamp01(lightness);
+
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+
+  let rPrime = 0;
+  let gPrime = 0;
+  let bPrime = 0;
+
+  if (h < 60) {
+    rPrime = c;
+    gPrime = x;
+  } else if (h < 120) {
+    rPrime = x;
+    gPrime = c;
+  } else if (h < 180) {
+    gPrime = c;
+    bPrime = x;
+  } else if (h < 240) {
+    gPrime = x;
+    bPrime = c;
+  } else if (h < 300) {
+    rPrime = x;
+    bPrime = c;
+  } else {
+    rPrime = c;
+    bPrime = x;
+  }
+
+  const r = Math.round((rPrime + m) * 255);
+  const g = Math.round((gPrime + m) * 255);
+  const b = Math.round((bPrime + m) * 255);
+  return (r << 16) | (g << 8) | b;
 }
 
 type LoopProfileSample = {

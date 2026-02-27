@@ -1,6 +1,15 @@
 :root {
   color-scheme: dark;
-  background: #04070d;
+  --bg-stop-0: #4a3b2d;
+  --bg-stop-1: #2e251d;
+  --bg-stop-2: #14100d;
+  background:
+    radial-gradient(
+      140% 120% at 10% 12%,
+      var(--bg-stop-0) 0%,
+      var(--bg-stop-1) 42%,
+      var(--bg-stop-2) 100%
+    );
 }
 
 * {
@@ -17,7 +26,13 @@ body,
 
 body {
   overflow: hidden;
-  background: #04070d;
+  background:
+    radial-gradient(
+      140% 120% at 10% 12%,
+      var(--bg-stop-0) 0%,
+      var(--bg-stop-1) 42%,
+      var(--bg-stop-2) 100%
+    );
 }
 
 #app {

@@ -25,6 +25,12 @@ export interface SimBoidsConfig {
 export type SimMathMode = "accurate" | "fast";
 const MAX_BIRD_CAPACITY = 10_000;
 
+function randomSeed32(): number {
+  const bytes = new Uint32Array(1);
+  crypto.getRandomValues(bytes);
+  return bytes[0];
+}
+
 export class WasmSimClient {
   private readonly sim: Sim;
   private readonly wasmMemory: WebAssembly.Memory;
@@ -255,9 +261,11 @@ export async function initWasmModule(): Promise<WasmSimClient> {
   const wasm = await initWasm();
   console.log(wasm_loaded_message());
 
-  const sim = new WasmSimClient(MAX_BIRD_CAPACITY, 12_345, 1.0, 1.0, wasm.memory);
+  const seed = randomSeed32();
+  const sim = new WasmSimClient(MAX_BIRD_CAPACITY, seed, 1.0, 1.0, wasm.memory);
   console.log("Sim ready", {
     count: sim.getCount(),
+    seed,
     ptr: sim.getPointer(),
     depthPtr: sim.getDepthPointer(),
   });
