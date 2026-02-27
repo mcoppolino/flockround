@@ -9,6 +9,21 @@ const ENABLE_FRAME_LOGS = false;
 const PROFILE_WINDOW_MS = 500;
 const K_SLIDER_MIN_INDEX = 0;
 const K_SLIDER_MAX_INDEX = 128;
+const DRAG_UI_MAX = 6.0;
+const DEFAULT_Z_ENABLED = true;
+const DEFAULT_BOUNCE_X = false;
+const DEFAULT_BOUNCE_Y = false;
+const DEFAULT_BOUNCE_Z = true;
+const DEFAULT_MATH_MODE: SimMathMode = "fast";
+const DEFAULT_NEIGHBOR_CAP = 24;
+const DEFAULT_RENDER_STRIDE = 1;
+const DEFAULT_PROFILE_ENABLED = true;
+const DEFAULT_MAX_FORCE = 0.2;
+const DEFAULT_DRAG = 1.2;
+const DEFAULT_MIN_DISTANCE = 0.3;
+const DEFAULT_HARD_MIN_DISTANCE = 0.01;
+const DEFAULT_JITTER_STRENGTH = 0.4;
+const DEFAULT_ACTIVE_BIRDS = 5_000;
 
 function sliderIndexToNeighborCap(index: number): number {
   const clampedIndex = Math.min(K_SLIDER_MAX_INDEX, Math.max(K_SLIDER_MIN_INDEX, index));
@@ -36,6 +51,17 @@ function neighborCapToSliderIndex(cap: number): number {
   return Math.min(126, Math.max(0, rounded - 2));
 }
 
+function normalizedToRange(normalized: number, maxValue: number): number {
+  return clamp01(normalized) * maxValue;
+}
+
+function rangeToNormalized(value: number, maxValue: number): number {
+  if (!Number.isFinite(value) || maxValue <= 0) {
+    return 0;
+  }
+  return clamp01(value / maxValue);
+}
+
 async function start(): Promise<void> {
   const host = document.getElementById("app");
   if (!host) {
@@ -44,34 +70,40 @@ async function start(): Promise<void> {
 
   const sim = await initWasmModule();
 
-  let zEnabled = true;
-  let bounceX = false;
-  let bounceY = false;
-  let bounceZ = true;
-  let mathMode: SimMathMode = "accurate";
-  let neighborCap = 24;
-  let renderStride = 1;
-  let profileEnabled = true;
-  let maxForce = 0.42;
-  let minDistance = 0.008;
-  let jitterStrength = 0.01;
+  let zEnabled = DEFAULT_Z_ENABLED;
+  let bounceX = DEFAULT_BOUNCE_X;
+  let bounceY = DEFAULT_BOUNCE_Y;
+  let bounceZ = DEFAULT_BOUNCE_Z;
+  let mathMode: SimMathMode = DEFAULT_MATH_MODE;
+  let neighborCap = DEFAULT_NEIGHBOR_CAP;
+  let renderStride = DEFAULT_RENDER_STRIDE;
+  let profileEnabled = DEFAULT_PROFILE_ENABLED;
+  let maxForce = DEFAULT_MAX_FORCE;
+  let drag = DEFAULT_DRAG;
+  let minDistance = DEFAULT_MIN_DISTANCE;
+  let hardMinDistance = DEFAULT_HARD_MIN_DISTANCE;
+  let jitterStrength = DEFAULT_JITTER_STRENGTH;
 
+  const totalBoids = sim.getCount();
+  let activeBoids = Math.min(DEFAULT_ACTIVE_BIRDS, totalBoids);
   sim.setZMode(zEnabled);
   sim.setZForceScale(0.75);
   sim.setAxisBounce(bounceX, bounceY, bounceZ);
   sim.setMathMode(mathMode);
   sim.setMaxNeighborsSampled(neighborCap);
   sim.setMaxForce(maxForce);
+  sim.setDrag(drag);
   sim.setMinDistance(minDistance);
+  sim.setHardMinDistance(hardMinDistance);
   sim.setJitterStrength(jitterStrength);
-  const totalBoids = sim.getCount();
+  sim.setActiveCount(activeBoids);
 
   const view = await FlockView.create(host, {
     dprCap: 2,
     renderScale: 1,
   });
   view.setTheme(DEFAULT_FLOCK_THEME);
-  const controls = createDebugControls(host);
+  const controls = createDebugControls(host, totalBoids);
   const profiler = createLoopProfiler(controls.profileStats);
   profiler.setEnabled(profileEnabled);
 
@@ -83,7 +115,9 @@ async function start(): Promise<void> {
     sim.setMathMode(mathMode);
     sim.setMaxNeighborsSampled(neighborCap);
     sim.setMaxForce(maxForce);
+    sim.setDrag(drag);
     sim.setMinDistance(minDistance);
+    sim.setHardMinDistance(hardMinDistance);
     sim.setJitterStrength(jitterStrength);
   };
 
@@ -96,12 +130,19 @@ async function start(): Promise<void> {
       mathMode === "fast" ? "Math: Fast" : "Math: Accurate";
     controls.kValueLabel.textContent = neighborCap === 0 ? "k=inf" : `k=${neighborCap}`;
     controls.kSlider.value = String(neighborCapToSliderIndex(neighborCap));
+    controls.birdCountValueLabel.textContent = `n=${activeBoids}/${totalBoids}`;
+    controls.birdCountSlider.value = String(activeBoids);
     controls.maxForceValueLabel.textContent = `f=${maxForce.toFixed(3)}`;
     controls.maxForceSlider.value = maxForce.toFixed(3);
+    const dragNorm = rangeToNormalized(drag, DRAG_UI_MAX);
+    controls.dragValueLabel.textContent = `g=${dragNorm.toFixed(3)} (${drag.toFixed(3)})`;
+    controls.dragSlider.value = dragNorm.toFixed(3);
     controls.renderValueLabel.textContent = `draw 1/${renderStride}`;
     controls.renderSlider.value = String(renderStride);
     controls.minDistanceValueLabel.textContent = `d=${minDistance.toFixed(3)}`;
     controls.minDistanceSlider.value = minDistance.toFixed(3);
+    controls.hardMinDistanceValueLabel.textContent = `h=${hardMinDistance.toFixed(3)}`;
+    controls.hardMinDistanceSlider.value = hardMinDistance.toFixed(3);
     controls.jitterValueLabel.textContent = `j=${jitterStrength.toFixed(3)}`;
     controls.jitterSlider.value = jitterStrength.toFixed(3);
     controls.profileButton.textContent = profileEnabled ? "Profile: On" : "Profile: Off";
@@ -151,8 +192,21 @@ async function start(): Promise<void> {
     updateDebugState();
   });
 
+  controls.birdCountSlider.addEventListener("input", () => {
+    activeBoids = Number.parseInt(controls.birdCountSlider.value, 10);
+    sim.setActiveCount(activeBoids);
+    updateDebugState();
+  });
+
   controls.maxForceSlider.addEventListener("input", () => {
     maxForce = Number.parseFloat(controls.maxForceSlider.value);
+    applyMathSettings();
+    updateDebugState();
+  });
+
+  controls.dragSlider.addEventListener("input", () => {
+    const dragNorm = Number.parseFloat(controls.dragSlider.value);
+    drag = normalizedToRange(dragNorm, DRAG_UI_MAX);
     applyMathSettings();
     updateDebugState();
   });
@@ -164,6 +218,12 @@ async function start(): Promise<void> {
 
   controls.minDistanceSlider.addEventListener("input", () => {
     minDistance = Number.parseFloat(controls.minDistanceSlider.value);
+    applyMathSettings();
+    updateDebugState();
+  });
+
+  controls.hardMinDistanceSlider.addEventListener("input", () => {
+    hardMinDistance = Number.parseFloat(controls.hardMinDistanceSlider.value);
     applyMathSettings();
     updateDebugState();
   });
@@ -245,7 +305,7 @@ async function start(): Promise<void> {
 
     const positions = sim.getPositions();
     const renderStartMs = performance.now();
-    view.render(positions, zEnabled ? sim.getDepth() : undefined, renderStride);
+    view.render(positions, zEnabled ? sim.getDepth() : undefined, renderStride, activeBoids);
     const renderMs = performance.now() - renderStartMs;
     const frameMs = performance.now() - frameStartMs;
 
@@ -256,8 +316,9 @@ async function start(): Promise<void> {
         renderMs,
         simSteps,
         neighborsVisited: sim.getNeighborsVisitedLastStep(),
-        renderedBoids: Math.ceil(totalBoids / renderStride),
-        totalBoids,
+        renderedBoids: Math.ceil(activeBoids / renderStride),
+        activeBoids,
+        maxBoids: totalBoids,
       });
     }
 
@@ -305,7 +366,7 @@ async function start(): Promise<void> {
 
 void start();
 
-function createDebugControls(host: HTMLElement): {
+function createDebugControls(host: HTMLElement, maxBirds: number): {
   xBoundsButton: HTMLButtonElement;
   yBoundsButton: HTMLButtonElement;
   zBoundsButton: HTMLButtonElement;
@@ -314,12 +375,18 @@ function createDebugControls(host: HTMLElement): {
   profileButton: HTMLButtonElement;
   kSlider: HTMLInputElement;
   kValueLabel: HTMLSpanElement;
+  birdCountSlider: HTMLInputElement;
+  birdCountValueLabel: HTMLSpanElement;
   maxForceSlider: HTMLInputElement;
   maxForceValueLabel: HTMLSpanElement;
+  dragSlider: HTMLInputElement;
+  dragValueLabel: HTMLSpanElement;
   renderSlider: HTMLInputElement;
   renderValueLabel: HTMLSpanElement;
   minDistanceSlider: HTMLInputElement;
   minDistanceValueLabel: HTMLSpanElement;
+  hardMinDistanceSlider: HTMLInputElement;
+  hardMinDistanceValueLabel: HTMLSpanElement;
   jitterSlider: HTMLInputElement;
   jitterValueLabel: HTMLSpanElement;
   profileStats: HTMLPreElement;
@@ -351,20 +418,21 @@ function createDebugControls(host: HTMLElement): {
   xBoundsButton.title = "X-axis boundary mode: Wrap teleports at edges, Bounce reflects velocity.";
   const yBoundsButton = createDebugButton("Y: Wrap");
   yBoundsButton.title = "Y-axis boundary mode: Wrap teleports at edges, Bounce reflects velocity.";
-  const zBoundsButton = createDebugButton("Z: Wrap");
+  const zBoundsButton = createDebugButton("Z: Bounce");
   zBoundsButton.title = "Z-axis boundary mode: Wrap teleports at edges, Bounce reflects velocity.";
   const zModeButton = createDebugButton("Z Mode: On");
   zModeButton.title = "Enable or disable depth simulation (3D movement).";
-  const mathModeButton = createDebugButton("Math: Accurate");
+  const mathModeButton = createDebugButton("Math: Fast");
   mathModeButton.title = "Math path for vector ops: Accurate favors precision, Fast favors speed.";
-  const profileButton = createDebugButton("Profile: Off");
+  const profileButton = createDebugButton("Profile: On");
   profileButton.title = "Toggle runtime performance metrics overlay.";
+  const defaultActiveBirds = Math.min(maxBirds, DEFAULT_ACTIVE_BIRDS);
   const kSlider = document.createElement("input");
   kSlider.type = "range";
   kSlider.min = String(K_SLIDER_MIN_INDEX);
   kSlider.max = String(K_SLIDER_MAX_INDEX);
   kSlider.step = "1";
-  kSlider.value = String(neighborCapToSliderIndex(24));
+  kSlider.value = String(neighborCapToSliderIndex(DEFAULT_NEIGHBOR_CAP));
   kSlider.style.width = "90px";
   kSlider.style.height = "20px";
   kSlider.style.margin = "0";
@@ -372,7 +440,7 @@ function createDebugControls(host: HTMLElement): {
   kSlider.title = "k: max neighbors sampled per boid (inf means unbounded).";
 
   const kValueLabel = document.createElement("span");
-  kValueLabel.textContent = "k=24";
+  kValueLabel.textContent = `k=${DEFAULT_NEIGHBOR_CAP}`;
   kValueLabel.style.display = "inline-flex";
   kValueLabel.style.alignItems = "center";
   kValueLabel.style.height = "20px";
@@ -381,12 +449,34 @@ function createDebugControls(host: HTMLElement): {
   kValueLabel.style.font =
     '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
 
+  const birdCountSlider = document.createElement("input");
+  birdCountSlider.type = "range";
+  birdCountSlider.min = "1";
+  birdCountSlider.max = String(maxBirds);
+  birdCountSlider.step = "1";
+  birdCountSlider.value = String(defaultActiveBirds);
+  birdCountSlider.style.width = "90px";
+  birdCountSlider.style.height = "20px";
+  birdCountSlider.style.margin = "0";
+  birdCountSlider.style.cursor = "pointer";
+  birdCountSlider.title = "n: active bird count simulated and rendered.";
+
+  const birdCountValueLabel = document.createElement("span");
+  birdCountValueLabel.textContent = `n=${defaultActiveBirds}/${maxBirds}`;
+  birdCountValueLabel.style.display = "inline-flex";
+  birdCountValueLabel.style.alignItems = "center";
+  birdCountValueLabel.style.height = "20px";
+  birdCountValueLabel.style.padding = "0 4px";
+  birdCountValueLabel.style.color = "#e6f0ff";
+  birdCountValueLabel.style.font =
+    '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
   const maxForceSlider = document.createElement("input");
   maxForceSlider.type = "range";
   maxForceSlider.min = "0.000";
   maxForceSlider.max = "5.000";
   maxForceSlider.step = "0.010";
-  maxForceSlider.value = "0.420";
+  maxForceSlider.value = DEFAULT_MAX_FORCE.toFixed(3);
   maxForceSlider.style.width = "90px";
   maxForceSlider.style.height = "20px";
   maxForceSlider.style.margin = "0";
@@ -395,13 +485,36 @@ function createDebugControls(host: HTMLElement): {
     "f: maximum steering force magnitude cap (limit_magnitude_3d); f=0 disables steering.";
 
   const maxForceValueLabel = document.createElement("span");
-  maxForceValueLabel.textContent = "f=0.420";
+  maxForceValueLabel.textContent = `f=${DEFAULT_MAX_FORCE.toFixed(3)}`;
   maxForceValueLabel.style.display = "inline-flex";
   maxForceValueLabel.style.alignItems = "center";
   maxForceValueLabel.style.height = "20px";
   maxForceValueLabel.style.padding = "0 4px";
   maxForceValueLabel.style.color = "#e6f0ff";
   maxForceValueLabel.style.font =
+    '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
+  const dragSlider = document.createElement("input");
+  dragSlider.type = "range";
+  dragSlider.min = "0.000";
+  dragSlider.max = "1.000";
+  dragSlider.step = "0.001";
+  dragSlider.value = rangeToNormalized(DEFAULT_DRAG, DRAG_UI_MAX).toFixed(3);
+  dragSlider.style.width = "90px";
+  dragSlider.style.height = "20px";
+  dragSlider.style.margin = "0";
+  dragSlider.style.cursor = "pointer";
+  dragSlider.title = "g: normalized drag 0..1 (maps to 0..6 1/s damping).";
+
+  const dragValueLabel = document.createElement("span");
+  dragValueLabel.textContent =
+    `g=${rangeToNormalized(DEFAULT_DRAG, DRAG_UI_MAX).toFixed(3)} (${DEFAULT_DRAG.toFixed(3)})`;
+  dragValueLabel.style.display = "inline-flex";
+  dragValueLabel.style.alignItems = "center";
+  dragValueLabel.style.height = "20px";
+  dragValueLabel.style.padding = "0 4px";
+  dragValueLabel.style.color = "#e6f0ff";
+  dragValueLabel.style.font =
     '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
 
   const renderSlider = document.createElement("input");
@@ -429,17 +542,17 @@ function createDebugControls(host: HTMLElement): {
   const minDistanceSlider = document.createElement("input");
   minDistanceSlider.type = "range";
   minDistanceSlider.min = "0.000";
-  minDistanceSlider.max = "0.300";
+  minDistanceSlider.max = "1.000";
   minDistanceSlider.step = "0.001";
-  minDistanceSlider.value = "0.008";
+  minDistanceSlider.value = DEFAULT_MIN_DISTANCE.toFixed(3);
   minDistanceSlider.style.width = "90px";
   minDistanceSlider.style.height = "20px";
   minDistanceSlider.style.margin = "0";
   minDistanceSlider.style.cursor = "pointer";
-  minDistanceSlider.title = "d: hard minimum separation distance; higher pushes tight clumps apart.";
+  minDistanceSlider.title = "d: soft minimum separation (boids force shaping) in world units.";
 
   const minDistanceValueLabel = document.createElement("span");
-  minDistanceValueLabel.textContent = "d=0.008";
+  minDistanceValueLabel.textContent = `d=${DEFAULT_MIN_DISTANCE.toFixed(3)}`;
   minDistanceValueLabel.style.display = "inline-flex";
   minDistanceValueLabel.style.alignItems = "center";
   minDistanceValueLabel.style.height = "20px";
@@ -448,20 +561,43 @@ function createDebugControls(host: HTMLElement): {
   minDistanceValueLabel.style.font =
     '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
 
+  const hardMinDistanceSlider = document.createElement("input");
+  hardMinDistanceSlider.type = "range";
+  hardMinDistanceSlider.min = "0.000";
+  hardMinDistanceSlider.max = "1.000";
+  hardMinDistanceSlider.step = "0.001";
+  hardMinDistanceSlider.value = DEFAULT_HARD_MIN_DISTANCE.toFixed(3);
+  hardMinDistanceSlider.style.width = "90px";
+  hardMinDistanceSlider.style.height = "20px";
+  hardMinDistanceSlider.style.margin = "0";
+  hardMinDistanceSlider.style.cursor = "pointer";
+  hardMinDistanceSlider.title =
+    "h: hard post-step distance floor in world units (applied with tiny incremental corrections).";
+
+  const hardMinDistanceValueLabel = document.createElement("span");
+  hardMinDistanceValueLabel.textContent = `h=${DEFAULT_HARD_MIN_DISTANCE.toFixed(3)}`;
+  hardMinDistanceValueLabel.style.display = "inline-flex";
+  hardMinDistanceValueLabel.style.alignItems = "center";
+  hardMinDistanceValueLabel.style.height = "20px";
+  hardMinDistanceValueLabel.style.padding = "0 4px";
+  hardMinDistanceValueLabel.style.color = "#e6f0ff";
+  hardMinDistanceValueLabel.style.font =
+    '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
   const jitterSlider = document.createElement("input");
   jitterSlider.type = "range";
   jitterSlider.min = "0.000";
-  jitterSlider.max = "0.500";
+  jitterSlider.max = "1.000";
   jitterSlider.step = "0.001";
-  jitterSlider.value = "0.010";
+  jitterSlider.value = DEFAULT_JITTER_STRENGTH.toFixed(3);
   jitterSlider.style.width = "90px";
   jitterSlider.style.height = "20px";
   jitterSlider.style.margin = "0";
   jitterSlider.style.cursor = "pointer";
-  jitterSlider.title = "j: random steering jitter magnitude to break symmetric clustering.";
+  jitterSlider.title = "j: random steering jitter magnitude in force units.";
 
   const jitterValueLabel = document.createElement("span");
-  jitterValueLabel.textContent = "j=0.010";
+  jitterValueLabel.textContent = `j=${DEFAULT_JITTER_STRENGTH.toFixed(3)}`;
   jitterValueLabel.style.display = "inline-flex";
   jitterValueLabel.style.alignItems = "center";
   jitterValueLabel.style.height = "20px";
@@ -499,9 +635,12 @@ function createDebugControls(host: HTMLElement): {
     "Z Mode: enable depth simulation",
     "Math: vector math mode (Accurate/Fast)",
     "k: neighbors sampled per boid (inf = uncapped)",
+    "n: active bird count",
     "f: max steering force clamp",
+    "g: normalized drag (0..1 -> 0..6 1/s)",
     "draw: render stride (1 = draw all boids)",
-    "d: minimum separation distance",
+    "d: soft minimum separation distance",
+    "h: hard post-step minimum distance floor",
     "j: random steering jitter",
   ].join("\n");
 
@@ -543,9 +682,12 @@ function createDebugControls(host: HTMLElement): {
 
   sliderStack.append(
     createSliderRow(kSlider, kValueLabel),
+    createSliderRow(birdCountSlider, birdCountValueLabel),
     createSliderRow(maxForceSlider, maxForceValueLabel),
+    createSliderRow(dragSlider, dragValueLabel),
     createSliderRow(renderSlider, renderValueLabel),
     createSliderRow(minDistanceSlider, minDistanceValueLabel),
+    createSliderRow(hardMinDistanceSlider, hardMinDistanceValueLabel),
     createSliderRow(jitterSlider, jitterValueLabel),
   );
 
@@ -561,12 +703,18 @@ function createDebugControls(host: HTMLElement): {
     profileButton,
     kSlider,
     kValueLabel,
+    birdCountSlider,
+    birdCountValueLabel,
     maxForceSlider,
     maxForceValueLabel,
+    dragSlider,
+    dragValueLabel,
     renderSlider,
     renderValueLabel,
     minDistanceSlider,
     minDistanceValueLabel,
+    hardMinDistanceSlider,
+    hardMinDistanceValueLabel,
     jitterSlider,
     jitterValueLabel,
     profileStats,
@@ -596,7 +744,8 @@ type LoopProfileSample = {
   simSteps: number;
   neighborsVisited: number;
   renderedBoids: number;
-  totalBoids: number;
+  activeBoids: number;
+  maxBoids: number;
 };
 
 type MetricLevel = "good" | "warn" | "bad";
@@ -720,7 +869,7 @@ function createLoopProfiler(output: HTMLPreElement): {
     const jsOtherMs = Math.max(0, frameAvgMs - simAvgMs - renderAvgMs);
     const simStepsAvg = simStepsSum / frameCount;
     const neighborsAvg = Math.round(neighborsVisitedSum / frameCount);
-    const neighborsPerBoid = sample.totalBoids > 0 ? neighborsAvg / sample.totalBoids : 0;
+    const neighborsPerBoid = sample.activeBoids > 0 ? neighborsAvg / sample.activeBoids : 0;
 
     const fpsLevel: MetricLevel = fps >= 55 ? "good" : fps >= 30 ? "warn" : "bad";
     const frameLevel: MetricLevel =
@@ -789,7 +938,7 @@ function createLoopProfiler(output: HTMLPreElement): {
         neighborsLevel,
         renderMixerBar(neighborsLoad),
       ),
-      `draw ${sample.renderedBoids}/${sample.totalBoids}`,
+      `draw ${sample.renderedBoids}/${sample.activeBoids} (max ${sample.maxBoids})`,
     ].join("\n");
 
     resetWindow(now);

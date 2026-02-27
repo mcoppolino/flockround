@@ -25,11 +25,17 @@ const MIN_Z_FORCE_SCALE: f32 = 0.0;
 const MAX_Z_FORCE_SCALE: f32 = 2.0;
 const DEFAULT_Z_FORCE_SCALE: f32 = 0.75;
 const MIN_MIN_DISTANCE: f32 = 0.0;
-const MAX_MIN_DISTANCE: f32 = 0.3;
-const DEFAULT_MIN_DISTANCE: f32 = 0.008;
+const MAX_MIN_DISTANCE: f32 = 1.0;
+const DEFAULT_SOFT_MIN_DISTANCE: f32 = 0.008;
+const DEFAULT_HARD_MIN_DISTANCE: f32 = 0.0;
 const MIN_JITTER_STRENGTH: f32 = 0.0;
-const MAX_JITTER_STRENGTH: f32 = 0.5;
+const MAX_JITTER_STRENGTH: f32 = 1.0;
 const DEFAULT_JITTER_STRENGTH: f32 = 0.01;
+const MIN_DRAG: f32 = 0.0;
+const MAX_DRAG: f32 = 6.0;
+const DEFAULT_DRAG: f32 = 0.0;
+const HARD_CONSTRAINT_RELAXATION: f32 = 0.05;
+const HARD_CONSTRAINT_MAX_PUSH: f32 = 0.0025;
 
 #[derive(Clone, Copy)]
 struct Lcg32 {
@@ -67,8 +73,10 @@ struct SimConfig {
     max_force: f32,
     math_mode: MathMode,
     max_neighbors_sampled: usize,
-    min_distance: f32,
+    soft_min_distance: f32,
+    hard_min_distance: f32,
     jitter_strength: f32,
+    drag: f32,
 }
 
 impl Default for SimConfig {
@@ -84,8 +92,10 @@ impl Default for SimConfig {
             max_force: DEFAULT_MAX_FORCE,
             math_mode: MathMode::Accurate,
             max_neighbors_sampled: 0,
-            min_distance: DEFAULT_MIN_DISTANCE,
+            soft_min_distance: DEFAULT_SOFT_MIN_DISTANCE,
+            hard_min_distance: DEFAULT_HARD_MIN_DISTANCE,
             jitter_strength: DEFAULT_JITTER_STRENGTH,
+            drag: DEFAULT_DRAG,
         }
     }
 }
@@ -124,11 +134,17 @@ impl SimConfig {
             MAX_MAX_FORCE,
             DEFAULT_MAX_FORCE,
         );
-        self.min_distance = clamp_finite(
-            self.min_distance,
+        self.soft_min_distance = clamp_finite(
+            self.soft_min_distance,
             MIN_MIN_DISTANCE,
             MAX_MIN_DISTANCE,
-            DEFAULT_MIN_DISTANCE,
+            DEFAULT_SOFT_MIN_DISTANCE,
+        );
+        self.hard_min_distance = clamp_finite(
+            self.hard_min_distance,
+            MIN_MIN_DISTANCE,
+            MAX_MIN_DISTANCE,
+            DEFAULT_HARD_MIN_DISTANCE,
         );
         self.jitter_strength = clamp_finite(
             self.jitter_strength,
@@ -136,12 +152,14 @@ impl SimConfig {
             MAX_JITTER_STRENGTH,
             DEFAULT_JITTER_STRENGTH,
         );
+        self.drag = clamp_finite(self.drag, MIN_DRAG, MAX_DRAG, DEFAULT_DRAG);
     }
 }
 
 #[wasm_bindgen]
 pub struct Sim {
     count: usize,
+    active_count: usize,
     width: f32,
     height: f32,
     config: SimConfig,
@@ -203,6 +221,7 @@ impl Sim {
 
         Sim {
             count,
+            active_count: count,
             width,
             height,
             config,
@@ -251,8 +270,10 @@ impl Sim {
             max_force,
             math_mode: self.config.math_mode,
             max_neighbors_sampled: self.config.max_neighbors_sampled,
-            min_distance: self.config.min_distance,
+            soft_min_distance: self.config.soft_min_distance,
+            hard_min_distance: self.config.hard_min_distance,
             jitter_strength: self.config.jitter_strength,
+            drag: self.config.drag,
         };
         self.config.sanitize();
 
@@ -353,16 +374,29 @@ impl Sim {
     }
 
     pub fn set_min_distance(&mut self, min_distance: f32) {
-        self.config.min_distance = clamp_finite(
+        self.config.soft_min_distance = clamp_finite(
             min_distance,
             MIN_MIN_DISTANCE,
             MAX_MIN_DISTANCE,
-            DEFAULT_MIN_DISTANCE,
+            DEFAULT_SOFT_MIN_DISTANCE,
         );
     }
 
     pub fn min_distance(&self) -> f32 {
-        self.config.min_distance
+        self.config.soft_min_distance
+    }
+
+    pub fn set_hard_min_distance(&mut self, min_distance: f32) {
+        self.config.hard_min_distance = clamp_finite(
+            min_distance,
+            MIN_MIN_DISTANCE,
+            MAX_MIN_DISTANCE,
+            DEFAULT_HARD_MIN_DISTANCE,
+        );
+    }
+
+    pub fn hard_min_distance(&self) -> f32 {
+        self.config.hard_min_distance
     }
 
     pub fn set_jitter_strength(&mut self, jitter_strength: f32) {
@@ -378,9 +412,17 @@ impl Sim {
         self.config.jitter_strength
     }
 
+    pub fn set_drag(&mut self, drag: f32) {
+        self.config.drag = clamp_finite(drag, MIN_DRAG, MAX_DRAG, DEFAULT_DRAG);
+    }
+
+    pub fn drag(&self) -> f32 {
+        self.config.drag
+    }
+
     pub fn step(&mut self, dt: f32) {
         let dt = dt.clamp(DT_MIN, DT_MAX);
-        if dt <= 0.0 || self.count == 0 {
+        if dt <= 0.0 || self.active_count == 0 {
             self.neighbors_visited_last_step = 0;
             return;
         }
@@ -394,12 +436,21 @@ impl Sim {
                 && self.config.align_weight <= EPSILON
                 && self.config.coh_weight <= EPSILON)
                 && self.config.jitter_strength <= EPSILON);
+        let drag_damping = if self.config.drag <= EPSILON {
+            1.0
+        } else {
+            (-self.config.drag * dt).exp()
+        };
 
         if steering_disabled {
-            for i in 0..self.count {
-                let vx = self.vel_x[i];
-                let vy = self.vel_y[i];
-                let vz = if self.z_mode_enabled { self.vel_z[i] } else { 0.0 };
+            for i in 0..self.active_count {
+                let vx = self.vel_x[i] * drag_damping;
+                let vy = self.vel_y[i] * drag_damping;
+                let vz = if self.z_mode_enabled {
+                    self.vel_z[i] * drag_damping
+                } else {
+                    0.0
+                };
 
                 let (x, vx) = integrate_axis(self.pos_x[i], vx, dt, self.bounce_x);
                 let (y, vy) = integrate_axis(self.pos_y[i], vy, dt, self.bounce_y);
@@ -415,13 +466,10 @@ impl Sim {
                 self.pos_x[i] = x;
                 self.pos_y[i] = y;
                 self.pos_z[i] = z;
-
-                let base = 2 * i;
-                self.render_xy[base] = x;
-                self.render_xy[base + 1] = y;
-                self.render_z[i] = z;
             }
 
+            self.resolve_hard_min_distance_constraints();
+            self.sync_render_buffers();
             self.debug_validate_state();
             return;
         }
@@ -429,9 +477,14 @@ impl Sim {
         self.neighbor_grid
             .set_cell_size(self.config.neighbor_radius);
         self.neighbor_grid
-            .rebuild(&self.pos_x, &self.pos_y, WORLD_SIZE, WORLD_SIZE);
+            .rebuild(
+                &self.pos_x[..self.active_count],
+                &self.pos_y[..self.active_count],
+                WORLD_SIZE,
+                WORLD_SIZE,
+            );
 
-        for i in 0..self.count {
+        for i in 0..self.active_count {
             let (ax, ay, az, neighbors_used) = self.compute_boids_acceleration(i);
             self.accel_x[i] = ax;
             self.accel_y[i] = ay;
@@ -439,11 +492,11 @@ impl Sim {
             self.neighbors_visited_last_step += neighbors_used;
         }
 
-        for i in 0..self.count {
-            let mut vx = self.vel_x[i] + self.accel_x[i] * dt;
-            let mut vy = self.vel_y[i] + self.accel_y[i] * dt;
+        for i in 0..self.active_count {
+            let mut vx = (self.vel_x[i] + self.accel_x[i] * dt) * drag_damping;
+            let mut vy = (self.vel_y[i] + self.accel_y[i] * dt) * drag_damping;
             let mut vz = if self.z_mode_enabled {
-                self.vel_z[i] + self.accel_z[i] * dt
+                (self.vel_z[i] + self.accel_z[i] * dt) * drag_damping
             } else {
                 0.0
             };
@@ -506,19 +559,24 @@ impl Sim {
             self.pos_x[i] = x;
             self.pos_y[i] = y;
             self.pos_z[i] = z;
-
-            let base = 2 * i;
-            self.render_xy[base] = x;
-            self.render_xy[base + 1] = y;
-            self.render_z[i] = z;
         }
 
+        self.resolve_hard_min_distance_constraints();
+        self.sync_render_buffers();
         self.debug_validate_state();
     }
 
     pub fn set_bounds(&mut self, width: f32, height: f32) {
         self.width = width.max(MIN_BOUND);
         self.height = height.max(MIN_BOUND);
+    }
+
+    pub fn set_active_count(&mut self, active_count: usize) {
+        self.active_count = active_count.min(self.count);
+    }
+
+    pub fn active_count(&self) -> usize {
+        self.active_count
     }
 
     pub fn count(&self) -> usize {
@@ -543,6 +601,108 @@ impl Sim {
 }
 
 impl Sim {
+    fn resolve_hard_min_distance_constraints(&mut self) {
+        let hard_min_distance = self.config.hard_min_distance;
+        if hard_min_distance <= EPSILON || self.active_count < 2 {
+            return;
+        }
+
+        let wrap_x = !self.bounce_x;
+        let wrap_y = !self.bounce_y;
+        let wrap_z = !self.bounce_z;
+        let min_distance_sq = hard_min_distance * hard_min_distance;
+
+        self.neighbor_grid.set_cell_size(hard_min_distance);
+        self.neighbor_grid
+            .rebuild(
+                &self.pos_x[..self.active_count],
+                &self.pos_y[..self.active_count],
+                WORLD_SIZE,
+                WORLD_SIZE,
+            );
+
+        let mut neighbors = Vec::new();
+        for i in 0..self.active_count {
+            neighbors.clear();
+            self.neighbor_grid.for_each_neighbor_with_wrap(
+                i,
+                hard_min_distance,
+                wrap_x,
+                wrap_y,
+                |j| {
+                    if j > i && !neighbors.contains(&j) {
+                        neighbors.push(j);
+                    }
+                    true
+                },
+            );
+
+            for &j in &neighbors {
+                let dx = axis_delta(self.pos_x[j] - self.pos_x[i], wrap_x);
+                let dy = axis_delta(self.pos_y[j] - self.pos_y[i], wrap_y);
+                let dz = if self.z_mode_enabled {
+                    axis_delta(self.pos_z[j] - self.pos_z[i], wrap_z)
+                } else {
+                    0.0
+                };
+                let dist_sq = math::distance_sq_3d(dx, dy, dz);
+                if dist_sq >= min_distance_sq {
+                    continue;
+                }
+
+                let (nx, ny, nz, dist) = if dist_sq > EPSILON {
+                    let dist = dist_sq.sqrt();
+                    (dx / dist, dy / dist, if self.z_mode_enabled { dz / dist } else { 0.0 }, dist)
+                } else {
+                    let mut nx = hash_unit(self.step_index, i as u32, 0);
+                    let mut ny = hash_unit(self.step_index, j as u32, 1);
+                    let mut nz = if self.z_mode_enabled {
+                        hash_unit(self.step_index, (i ^ j) as u32, 2)
+                    } else {
+                        0.0
+                    };
+                    let len_sq = nx * nx + ny * ny + nz * nz;
+                    if len_sq > EPSILON {
+                        let inv_len = 1.0 / len_sq.sqrt();
+                        nx *= inv_len;
+                        ny *= inv_len;
+                        nz *= inv_len;
+                    } else {
+                        nx = 1.0;
+                        ny = 0.0;
+                        nz = 0.0;
+                    }
+                    (nx, ny, nz, 0.0)
+                };
+
+                let push = ((hard_min_distance - dist) * 0.5 * HARD_CONSTRAINT_RELAXATION)
+                    .min(HARD_CONSTRAINT_MAX_PUSH);
+                if push <= 0.0 {
+                    continue;
+                }
+
+                self.pos_x[i] = project_axis_position(self.pos_x[i] - nx * push, self.bounce_x);
+                self.pos_y[i] = project_axis_position(self.pos_y[i] - ny * push, self.bounce_y);
+                self.pos_x[j] = project_axis_position(self.pos_x[j] + nx * push, self.bounce_x);
+                self.pos_y[j] = project_axis_position(self.pos_y[j] + ny * push, self.bounce_y);
+
+                if self.z_mode_enabled {
+                    self.pos_z[i] = project_axis_position(self.pos_z[i] - nz * push, self.bounce_z);
+                    self.pos_z[j] = project_axis_position(self.pos_z[j] + nz * push, self.bounce_z);
+                }
+            }
+        }
+    }
+
+    fn sync_render_buffers(&mut self) {
+        for i in 0..self.active_count {
+            let base = 2 * i;
+            self.render_xy[base] = self.pos_x[i];
+            self.render_xy[base + 1] = self.pos_y[i];
+            self.render_z[i] = self.pos_z[i];
+        }
+    }
+
     fn compute_boids_acceleration(&self, i: usize) -> (f32, f32, f32, usize) {
         let wrap_x = !self.bounce_x;
         let wrap_y = !self.bounce_y;
@@ -556,7 +716,7 @@ impl Sim {
 
         let neighbor_radius_sq = self.config.neighbor_radius * self.config.neighbor_radius;
         let separation_radius_sq = self.config.separation_radius * self.config.separation_radius;
-        let min_distance_sq = self.config.min_distance * self.config.min_distance;
+        let min_distance_sq = self.config.soft_min_distance * self.config.soft_min_distance;
 
         let mut sep_x = 0.0;
         let mut sep_y = 0.0;
@@ -572,6 +732,8 @@ impl Sim {
         let mut coh_z = 0.0;
 
         let mut neighbor_count = 0usize;
+        let mut neighbor_samples = 0usize;
+        let sample_cap = self.config.max_neighbors_sampled;
 
         self.neighbor_grid.for_each_neighbor_with_wrap(
             i,
@@ -579,6 +741,11 @@ impl Sim {
             wrap_x,
             wrap_y,
             |j| {
+                if sample_cap > 0 && neighbor_samples >= sample_cap {
+                    return false;
+                }
+                neighbor_samples += 1;
+
                 let dx = axis_delta(self.pos_x[j] - px, wrap_x);
                 let dy = axis_delta(self.pos_y[j] - py, wrap_y);
                 let dz = if self.z_mode_enabled {
@@ -590,12 +757,6 @@ impl Sim {
 
                 if dist_sq <= EPSILON || dist_sq > neighbor_radius_sq {
                     return true;
-                }
-
-                if self.config.max_neighbors_sampled > 0
-                    && neighbor_count >= self.config.max_neighbors_sampled
-                {
-                    return false;
                 }
 
                 neighbor_count += 1;
@@ -619,7 +780,7 @@ impl Sim {
 
                     if min_distance_sq > EPSILON && dist_sq < min_distance_sq {
                         let hard_push_mag =
-                            self.config.min_distance * (1.0 - dist_sq / min_distance_sq);
+                            self.config.soft_min_distance * (1.0 - dist_sq / min_distance_sq);
                         let (hard_x, hard_y, hard_z) = math::normalize_to_magnitude(
                             self.config.math_mode,
                             -dx,
@@ -753,6 +914,14 @@ fn shortest_wrapped_delta(delta: f32) -> f32 {
     }
 }
 
+fn project_axis_position(position: f32, bounce: bool) -> f32 {
+    if bounce {
+        position.clamp(0.0, WORLD_SIZE)
+    } else {
+        position.rem_euclid(WORLD_SIZE)
+    }
+}
+
 fn integrate_axis(position: f32, velocity: f32, dt: f32, bounce: bool) -> (f32, f32) {
     if !bounce {
         return ((position + velocity * dt).rem_euclid(WORLD_SIZE), velocity);
@@ -836,7 +1005,7 @@ pub fn wasm_loaded_message() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Sim, DEFAULT_Z_LAYER, WORLD_SIZE};
+    use super::{shortest_wrapped_delta, Sim, DEFAULT_Z_LAYER, WORLD_SIZE};
 
     #[test]
     fn disabled_z_mode_keeps_particles_in_mid_layer() {
@@ -935,5 +1104,47 @@ mod tests {
         sim.step(0.016);
 
         assert!(sim.neighbors_visited_last_step() <= sim.count() * 2);
+    }
+
+    #[test]
+    fn min_distance_is_enforced_as_hard_floor() {
+        let mut sim = Sim::new(2, 123, 1.0, 1.0);
+        sim.set_z_mode(false);
+        sim.set_axis_bounce(false, false, false);
+        sim.set_max_force(0.0);
+        sim.set_hard_min_distance(0.2);
+        sim.set_min_distance(0.0);
+
+        sim.pos_x[0] = 0.5;
+        sim.pos_y[0] = 0.5;
+        sim.pos_x[1] = 0.5;
+        sim.pos_y[1] = 0.5;
+        sim.vel_x[0] = 0.0;
+        sim.vel_y[0] = 0.0;
+        sim.vel_x[1] = 0.0;
+        sim.vel_y[1] = 0.0;
+
+        for _ in 0..2_000 {
+            sim.step(0.016);
+        }
+
+        let dx = shortest_wrapped_delta(sim.pos_x[1] - sim.pos_x[0]);
+        let dy = shortest_wrapped_delta(sim.pos_y[1] - sim.pos_y[0]);
+        let dist = (dx * dx + dy * dy).sqrt();
+        assert!(
+            dist + 2.0e-3 >= sim.hard_min_distance(),
+            "dist={dist}, hard_min_distance={}",
+            sim.hard_min_distance()
+        );
+    }
+
+    #[test]
+    fn soft_and_hard_min_distance_are_independent() {
+        let mut sim = Sim::new(2, 5, 1.0, 1.0);
+        sim.set_min_distance(0.12);
+        sim.set_hard_min_distance(0.34);
+
+        assert!((sim.min_distance() - 0.12).abs() < 1.0e-6);
+        assert!((sim.hard_min_distance() - 0.34).abs() < 1.0e-6);
     }
 }

@@ -90,8 +90,13 @@ export class FlockView {
     positions: Float32Array,
     depth?: Float32Array,
     sampleStride = 1,
+    maxCount?: number,
   ): void {
-    const totalCount = positions.length >>> 1;
+    const availableCount = positions.length >>> 1;
+    const totalCount =
+      maxCount === undefined
+        ? availableCount
+        : Math.max(0, Math.min(availableCount, Math.floor(maxCount)));
     const stride = Math.max(1, Math.floor(sampleStride));
     const nextCount = Math.ceil(totalCount / stride);
     if (!this.mesh || nextCount !== this.particleCount) {

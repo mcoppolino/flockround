@@ -15,11 +15,15 @@ export interface SimBoidsConfig {
   maxForce: number;
   mathMode?: SimMathMode;
   maxNeighborsSampled?: number;
+  activeCount?: number;
+  drag?: number;
   minDistance?: number;
+  hardMinDistance?: number;
   jitterStrength?: number;
 }
 
 export type SimMathMode = "accurate" | "fast";
+const MAX_BIRD_CAPACITY = 10_000;
 
 export class WasmSimClient {
   private readonly sim: Sim;
@@ -81,8 +85,17 @@ export class WasmSimClient {
     if (config.maxNeighborsSampled !== undefined) {
       this.setMaxNeighborsSampled(config.maxNeighborsSampled);
     }
+    if (config.activeCount !== undefined) {
+      this.setActiveCount(config.activeCount);
+    }
+    if (config.drag !== undefined) {
+      this.setDrag(config.drag);
+    }
     if (config.minDistance !== undefined) {
       this.setMinDistance(config.minDistance);
+    }
+    if (config.hardMinDistance !== undefined) {
+      this.setHardMinDistance(config.hardMinDistance);
     }
     if (config.jitterStrength !== undefined) {
       this.setJitterStrength(config.jitterStrength);
@@ -145,12 +158,28 @@ export class WasmSimClient {
     return this.sim.max_force();
   }
 
+  setDrag(drag: number): void {
+    this.sim.set_drag(Math.max(0, drag));
+  }
+
+  getDrag(): number {
+    return this.sim.drag();
+  }
+
   setMinDistance(minDistance: number): void {
     this.sim.set_min_distance(Math.max(0, minDistance));
   }
 
   getMinDistance(): number {
     return this.sim.min_distance();
+  }
+
+  setHardMinDistance(minDistance: number): void {
+    this.sim.set_hard_min_distance(Math.max(0, minDistance));
+  }
+
+  getHardMinDistance(): number {
+    return this.sim.hard_min_distance();
   }
 
   setJitterStrength(jitterStrength: number): void {
@@ -175,6 +204,14 @@ export class WasmSimClient {
 
   getCount(): number {
     return this.sim.count();
+  }
+
+  setActiveCount(activeCount: number): void {
+    this.sim.set_active_count(Math.max(0, Math.floor(activeCount)));
+  }
+
+  getActiveCount(): number {
+    return this.sim.active_count();
   }
 
   getPositions(): Float32Array {
@@ -218,7 +255,7 @@ export async function initWasmModule(): Promise<WasmSimClient> {
   const wasm = await initWasm();
   console.log(wasm_loaded_message());
 
-  const sim = new WasmSimClient(4_000, 12_345, 1.0, 1.0, wasm.memory);
+  const sim = new WasmSimClient(MAX_BIRD_CAPACITY, 12_345, 1.0, 1.0, wasm.memory);
   console.log("Sim ready", {
     count: sim.getCount(),
     ptr: sim.getPointer(),
