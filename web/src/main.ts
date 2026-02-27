@@ -1,5 +1,12 @@
 import { DEFAULT_FLOCK_THEME, FlockView, type FlockTheme } from "./render";
-import { initWasmModule, type SimMathMode } from "./wasm";
+import {
+  type ClassicModelConfig,
+  initWasmModule,
+  type Flock2FlightConfig,
+  type Flock2SocialConfig,
+  type SimMathMode,
+  type SimModelKind,
+} from "./wasm";
 import "./style.css";
 
 const MAX_FRAME_DT_SECONDS = 0.05;
@@ -24,6 +31,41 @@ const DEFAULT_MIN_DISTANCE = 0.5;
 const DEFAULT_HARD_MIN_DISTANCE = 0.02;
 const DEFAULT_JITTER_STRENGTH = 0.6;
 const DEFAULT_ACTIVE_BIRDS = 4_200;
+const DEFAULT_MODEL_KIND: SimModelKind = "classic";
+const DEFAULT_CLASSIC_CONFIG: ClassicModelConfig = {
+  mathMode: DEFAULT_MATH_MODE,
+  maxNeighborsSampled: DEFAULT_NEIGHBOR_CAP,
+  maxForce: DEFAULT_MAX_FORCE,
+  drag: DEFAULT_DRAG,
+  minDistance: DEFAULT_MIN_DISTANCE,
+  hardMinDistance: DEFAULT_HARD_MIN_DISTANCE,
+  jitterStrength: DEFAULT_JITTER_STRENGTH,
+};
+
+const DEFAULT_FLOCK2_SOCIAL: Flock2SocialConfig = {
+  avoidWeight: 0.02,
+  alignWeight: 0.6,
+  cohesionWeight: 0.004,
+  boundaryWeight: 0.1,
+  boundaryCount: 20,
+  neighborRadius: 0.1,
+  topologicalNeighbors: 7,
+  fieldOfViewDeg: 290,
+};
+
+const DEFAULT_FLOCK2_FLIGHT: Flock2FlightConfig = {
+  reactionTimeMs: 250,
+  dynamicStability: 0.7,
+  mass: 0.08,
+  wingArea: 0.0224,
+  liftFactor: 0.5714,
+  dragFactor: 0.1731,
+  thrust: 0.2373,
+  minSpeed: 5,
+  maxSpeed: 18,
+  gravity: 9.8,
+  airDensity: 1.225,
+};
 
 type PaletteSpec = {
   gradientStart: string;
@@ -81,7 +123,10 @@ const RANDOM_PALETTES: PaletteSpec[] = [
 ];
 
 function sliderIndexToNeighborCap(index: number): number {
-  const clampedIndex = Math.min(K_SLIDER_MAX_INDEX, Math.max(K_SLIDER_MIN_INDEX, index));
+  const clampedIndex = Math.min(
+    K_SLIDER_MAX_INDEX,
+    Math.max(K_SLIDER_MIN_INDEX, index),
+  );
   if (clampedIndex <= 126) {
     return clampedIndex + 2;
   }
@@ -125,32 +170,26 @@ async function start(): Promise<void> {
 
   const sim = await initWasmModule();
 
+  let modelKind: SimModelKind = DEFAULT_MODEL_KIND;
   let zEnabled = DEFAULT_Z_ENABLED;
   let bounceX = DEFAULT_BOUNCE_X;
   let bounceY = DEFAULT_BOUNCE_Y;
   let bounceZ = DEFAULT_BOUNCE_Z;
-  let mathMode: SimMathMode = DEFAULT_MATH_MODE;
-  let neighborCap = DEFAULT_NEIGHBOR_CAP;
   let renderStride = DEFAULT_RENDER_STRIDE;
   let profileEnabled = DEFAULT_PROFILE_ENABLED;
-  let maxForce = DEFAULT_MAX_FORCE;
-  let drag = DEFAULT_DRAG;
-  let minDistance = DEFAULT_MIN_DISTANCE;
-  let hardMinDistance = DEFAULT_HARD_MIN_DISTANCE;
-  let jitterStrength = DEFAULT_JITTER_STRENGTH;
+  const classicConfig: ClassicModelConfig = { ...DEFAULT_CLASSIC_CONFIG };
+  const flock2Social: Flock2SocialConfig = { ...DEFAULT_FLOCK2_SOCIAL };
+  const flock2Flight: Flock2FlightConfig = { ...DEFAULT_FLOCK2_FLIGHT };
 
   const totalBoids = sim.getCount();
   let activeBoids = Math.min(DEFAULT_ACTIVE_BIRDS, totalBoids);
+  sim.setModelKind(modelKind);
+  sim.setFlock2SocialConfig(flock2Social);
+  sim.setFlock2FlightConfig(flock2Flight);
   sim.setZMode(zEnabled);
   sim.setZForceScale(0.75);
   sim.setAxisBounce(bounceX, bounceY, bounceZ);
-  sim.setMathMode(mathMode);
-  sim.setMaxNeighborsSampled(neighborCap);
-  sim.setMaxForce(maxForce);
-  sim.setDrag(drag);
-  sim.setMinDistance(minDistance);
-  sim.setHardMinDistance(hardMinDistance);
-  sim.setJitterStrength(jitterStrength);
+  sim.setClassicConfig(classicConfig);
   sim.setActiveCount(activeBoids);
 
   const view = await FlockView.create(host, {
@@ -176,49 +215,131 @@ async function start(): Promise<void> {
     sim.setAxisBounce(bounceX, bounceY, bounceZ);
   };
 
-  const applyMathSettings = (): void => {
-    sim.setMathMode(mathMode);
-    sim.setMaxNeighborsSampled(neighborCap);
-    sim.setMaxForce(maxForce);
-    sim.setDrag(drag);
-    sim.setMinDistance(minDistance);
-    sim.setHardMinDistance(hardMinDistance);
-    sim.setJitterStrength(jitterStrength);
+  const applyClassicSettings = (): void => {
+    sim.setClassicConfig(classicConfig);
+  };
+
+  const applyFlock2Settings = (): void => {
+    sim.setFlock2SocialConfig(flock2Social);
+    sim.setFlock2FlightConfig(flock2Flight);
+  };
+
+  const applyActiveModelSettings = (): void => {
+    sim.setModelKind(modelKind);
+    if (modelKind === "classic") {
+      applyClassicSettings();
+      return;
+    }
+    applyFlock2Settings();
   };
 
   const updateDebugState = (): void => {
+    controls.modelSelect.value = modelKind;
+    controls.modelValueLabel.textContent = modelKindLabel(modelKind);
+    controls.controlHelp.textContent = modelLegendText(modelKind);
     controls.xBoundsButton.textContent = bounceX ? "X: Bounce" : "X: Wrap";
     controls.yBoundsButton.textContent = bounceY ? "Y: Bounce" : "Y: Wrap";
     controls.zBoundsButton.textContent = bounceZ ? "Z: Bounce" : "Z: Wrap";
     controls.zModeButton.textContent = zEnabled ? "Z Mode: On" : "Z Mode: Off";
     controls.mathModeButton.textContent =
-      mathMode === "fast" ? "Math: Fast" : "Math: Accurate";
-    controls.kValueLabel.textContent = neighborCap === 0 ? "k=inf" : `k=${neighborCap}`;
-    controls.kSlider.value = String(neighborCapToSliderIndex(neighborCap));
+      classicConfig.mathMode === "fast" ? "Math: Fast" : "Math: Accurate";
+    controls.kValueLabel.textContent =
+      classicConfig.maxNeighborsSampled === 0
+        ? "k=inf"
+        : `k=${classicConfig.maxNeighborsSampled}`;
+    controls.kSlider.value = String(
+      neighborCapToSliderIndex(classicConfig.maxNeighborsSampled),
+    );
     controls.birdCountValueLabel.textContent = `n=${activeBoids}/${totalBoids}`;
     controls.birdCountSlider.value = String(activeBoids);
-    controls.maxForceValueLabel.textContent = `f=${maxForce.toFixed(3)}`;
-    controls.maxForceSlider.value = maxForce.toFixed(3);
-    const dragNorm = rangeToNormalized(drag, DRAG_UI_MAX);
-    controls.dragValueLabel.textContent = `g=${dragNorm.toFixed(3)} (${drag.toFixed(3)})`;
+    controls.maxForceValueLabel.textContent = `f=${classicConfig.maxForce.toFixed(3)}`;
+    controls.maxForceSlider.value = classicConfig.maxForce.toFixed(3);
+    const dragNorm = rangeToNormalized(classicConfig.drag, DRAG_UI_MAX);
+    controls.dragValueLabel.textContent = `g=${dragNorm.toFixed(3)} (${classicConfig.drag.toFixed(3)})`;
     controls.dragSlider.value = dragNorm.toFixed(3);
     controls.renderValueLabel.textContent = `draw 1/${renderStride}`;
     controls.renderSlider.value = String(renderStride);
-    controls.minDistanceValueLabel.textContent = `d=${minDistance.toFixed(3)}`;
-    controls.minDistanceSlider.value = minDistance.toFixed(3);
-    controls.hardMinDistanceValueLabel.textContent = `h=${hardMinDistance.toFixed(3)}`;
-    controls.hardMinDistanceSlider.value = hardMinDistance.toFixed(3);
-    controls.jitterValueLabel.textContent = `j=${jitterStrength.toFixed(3)}`;
-    controls.jitterSlider.value = jitterStrength.toFixed(3);
-    controls.profileButton.textContent = profileEnabled ? "Profile: On" : "Profile: Off";
+    controls.minDistanceValueLabel.textContent = `d=${classicConfig.minDistance.toFixed(3)}`;
+    controls.minDistanceSlider.value = classicConfig.minDistance.toFixed(3);
+    controls.hardMinDistanceValueLabel.textContent = `h=${classicConfig.hardMinDistance.toFixed(3)}`;
+    controls.hardMinDistanceSlider.value =
+      classicConfig.hardMinDistance.toFixed(3);
+    controls.jitterValueLabel.textContent = `j=${classicConfig.jitterStrength.toFixed(3)}`;
+    controls.jitterSlider.value = classicConfig.jitterStrength.toFixed(3);
+    controls.f2NeighborRadiusValueLabel.textContent = `r=${flock2Social.neighborRadius.toFixed(3)}`;
+    controls.f2NeighborRadiusSlider.value =
+      flock2Social.neighborRadius.toFixed(3);
+    controls.f2TopologicalValueLabel.textContent = `k=${flock2Social.topologicalNeighbors}`;
+    controls.f2TopologicalSlider.value = String(
+      flock2Social.topologicalNeighbors,
+    );
+    controls.f2FovValueLabel.textContent = `fov=${flock2Social.fieldOfViewDeg.toFixed(0)}`;
+    controls.f2FovSlider.value = flock2Social.fieldOfViewDeg.toFixed(0);
+    controls.f2AvoidValueLabel.textContent = `av=${flock2Social.avoidWeight.toFixed(3)}`;
+    controls.f2AvoidSlider.value = flock2Social.avoidWeight.toFixed(3);
+    controls.f2AlignValueLabel.textContent = `al=${flock2Social.alignWeight.toFixed(3)}`;
+    controls.f2AlignSlider.value = flock2Social.alignWeight.toFixed(3);
+    controls.f2CohesionValueLabel.textContent = `co=${flock2Social.cohesionWeight.toFixed(3)}`;
+    controls.f2CohesionSlider.value = flock2Social.cohesionWeight.toFixed(3);
+    controls.f2BoundaryWeightValueLabel.textContent = `bw=${flock2Social.boundaryWeight.toFixed(3)}`;
+    controls.f2BoundaryWeightSlider.value =
+      flock2Social.boundaryWeight.toFixed(3);
+    controls.f2BoundaryCountValueLabel.textContent = `bc=${flock2Social.boundaryCount.toFixed(1)}`;
+    controls.f2BoundaryCountSlider.value =
+      flock2Social.boundaryCount.toFixed(1);
+    controls.f2ReactionValueLabel.textContent = `rt=${flock2Flight.reactionTimeMs.toFixed(0)}ms`;
+    controls.f2ReactionSlider.value = flock2Flight.reactionTimeMs.toFixed(0);
+    controls.f2StabilityValueLabel.textContent = `ds=${flock2Flight.dynamicStability.toFixed(3)}`;
+    controls.f2StabilitySlider.value = flock2Flight.dynamicStability.toFixed(3);
+    controls.f2MassValueLabel.textContent = `m=${flock2Flight.mass.toFixed(3)}`;
+    controls.f2MassSlider.value = flock2Flight.mass.toFixed(3);
+    controls.f2WingAreaValueLabel.textContent = `A=${flock2Flight.wingArea.toFixed(4)}`;
+    controls.f2WingAreaSlider.value = flock2Flight.wingArea.toFixed(4);
+    controls.f2LiftValueLabel.textContent = `cl=${flock2Flight.liftFactor.toFixed(3)}`;
+    controls.f2LiftSlider.value = flock2Flight.liftFactor.toFixed(3);
+    controls.f2AeroDragValueLabel.textContent = `cd=${flock2Flight.dragFactor.toFixed(3)}`;
+    controls.f2AeroDragSlider.value = flock2Flight.dragFactor.toFixed(3);
+    controls.f2ThrustValueLabel.textContent = `th=${flock2Flight.thrust.toFixed(3)}`;
+    controls.f2ThrustSlider.value = flock2Flight.thrust.toFixed(3);
+    controls.f2MinSpeedValueLabel.textContent = `vmin=${flock2Flight.minSpeed.toFixed(2)}`;
+    controls.f2MinSpeedSlider.value = flock2Flight.minSpeed.toFixed(2);
+    controls.f2MaxSpeedValueLabel.textContent = `vmax=${flock2Flight.maxSpeed.toFixed(2)}`;
+    controls.f2MaxSpeedSlider.value = flock2Flight.maxSpeed.toFixed(2);
+    controls.f2GravityValueLabel.textContent = `g=${flock2Flight.gravity.toFixed(2)}`;
+    controls.f2GravitySlider.value = flock2Flight.gravity.toFixed(2);
+    controls.f2AirDensityValueLabel.textContent = `rho=${flock2Flight.airDensity.toFixed(3)}`;
+    controls.f2AirDensitySlider.value = flock2Flight.airDensity.toFixed(3);
+    controls.profileButton.textContent = profileEnabled
+      ? "Profile: On"
+      : "Profile: Off";
+    const isClassic = modelKind === "classic";
+    const isFlightModel =
+      modelKind === "flock2-social-flight" ||
+      modelKind === "f2-lite-social-flight";
+    controls.classicRows.forEach((row) => {
+      row.style.display = isClassic ? "flex" : "none";
+    });
+    controls.flock2SocialRows.forEach((row) => {
+      row.style.display = isClassic ? "none" : "flex";
+    });
+    controls.flock2FlightRows.forEach((row) => {
+      row.style.display = isFlightModel ? "flex" : "none";
+    });
     setButtonState(controls.xBoundsButton, bounceX);
     setButtonState(controls.yBoundsButton, bounceY);
     setButtonState(controls.zBoundsButton, bounceZ);
     setButtonState(controls.zModeButton, zEnabled);
-    setButtonState(controls.mathModeButton, mathMode === "fast");
+    setButtonState(controls.mathModeButton, classicConfig.mathMode === "fast");
     setButtonState(controls.profileButton, profileEnabled);
   };
   updateDebugState();
+
+  controls.modelSelect.addEventListener("change", () => {
+    const nextKind = controls.modelSelect.value as SimModelKind;
+    modelKind = nextKind;
+    applyActiveModelSettings();
+    updateDebugState();
+  });
 
   controls.xBoundsButton.addEventListener("click", () => {
     bounceX = !bounceX;
@@ -245,15 +366,16 @@ async function start(): Promise<void> {
   });
 
   controls.mathModeButton.addEventListener("click", () => {
-    mathMode = mathMode === "fast" ? "accurate" : "fast";
-    applyMathSettings();
+    classicConfig.mathMode =
+      classicConfig.mathMode === "fast" ? "accurate" : "fast";
+    applyActiveModelSettings();
     updateDebugState();
   });
 
   controls.kSlider.addEventListener("input", () => {
     const sliderIndex = Number.parseInt(controls.kSlider.value, 10);
-    neighborCap = sliderIndexToNeighborCap(sliderIndex);
-    applyMathSettings();
+    classicConfig.maxNeighborsSampled = sliderIndexToNeighborCap(sliderIndex);
+    applyActiveModelSettings();
     updateDebugState();
   });
 
@@ -264,15 +386,15 @@ async function start(): Promise<void> {
   });
 
   controls.maxForceSlider.addEventListener("input", () => {
-    maxForce = Number.parseFloat(controls.maxForceSlider.value);
-    applyMathSettings();
+    classicConfig.maxForce = Number.parseFloat(controls.maxForceSlider.value);
+    applyActiveModelSettings();
     updateDebugState();
   });
 
   controls.dragSlider.addEventListener("input", () => {
     const dragNorm = Number.parseFloat(controls.dragSlider.value);
-    drag = normalizedToRange(dragNorm, DRAG_UI_MAX);
-    applyMathSettings();
+    classicConfig.drag = normalizedToRange(dragNorm, DRAG_UI_MAX);
+    applyActiveModelSettings();
     updateDebugState();
   });
 
@@ -282,20 +404,161 @@ async function start(): Promise<void> {
   });
 
   controls.minDistanceSlider.addEventListener("input", () => {
-    minDistance = Number.parseFloat(controls.minDistanceSlider.value);
-    applyMathSettings();
+    classicConfig.minDistance = Number.parseFloat(controls.minDistanceSlider.value);
+    applyActiveModelSettings();
     updateDebugState();
   });
 
   controls.hardMinDistanceSlider.addEventListener("input", () => {
-    hardMinDistance = Number.parseFloat(controls.hardMinDistanceSlider.value);
-    applyMathSettings();
+    classicConfig.hardMinDistance = Number.parseFloat(
+      controls.hardMinDistanceSlider.value,
+    );
+    applyActiveModelSettings();
     updateDebugState();
   });
 
   controls.jitterSlider.addEventListener("input", () => {
-    jitterStrength = Number.parseFloat(controls.jitterSlider.value);
-    applyMathSettings();
+    classicConfig.jitterStrength = Number.parseFloat(controls.jitterSlider.value);
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2NeighborRadiusSlider.addEventListener("input", () => {
+    flock2Social.neighborRadius = Number.parseFloat(
+      controls.f2NeighborRadiusSlider.value,
+    );
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2TopologicalSlider.addEventListener("input", () => {
+    flock2Social.topologicalNeighbors = Number.parseInt(
+      controls.f2TopologicalSlider.value,
+      10,
+    );
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2FovSlider.addEventListener("input", () => {
+    flock2Social.fieldOfViewDeg = Number.parseFloat(controls.f2FovSlider.value);
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2AvoidSlider.addEventListener("input", () => {
+    flock2Social.avoidWeight = Number.parseFloat(controls.f2AvoidSlider.value);
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2AlignSlider.addEventListener("input", () => {
+    flock2Social.alignWeight = Number.parseFloat(controls.f2AlignSlider.value);
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2CohesionSlider.addEventListener("input", () => {
+    flock2Social.cohesionWeight = Number.parseFloat(
+      controls.f2CohesionSlider.value,
+    );
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2BoundaryWeightSlider.addEventListener("input", () => {
+    flock2Social.boundaryWeight = Number.parseFloat(
+      controls.f2BoundaryWeightSlider.value,
+    );
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2BoundaryCountSlider.addEventListener("input", () => {
+    flock2Social.boundaryCount = Number.parseFloat(
+      controls.f2BoundaryCountSlider.value,
+    );
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2ReactionSlider.addEventListener("input", () => {
+    flock2Flight.reactionTimeMs = Number.parseFloat(
+      controls.f2ReactionSlider.value,
+    );
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2StabilitySlider.addEventListener("input", () => {
+    flock2Flight.dynamicStability = Number.parseFloat(
+      controls.f2StabilitySlider.value,
+    );
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2MassSlider.addEventListener("input", () => {
+    flock2Flight.mass = Number.parseFloat(controls.f2MassSlider.value);
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2WingAreaSlider.addEventListener("input", () => {
+    flock2Flight.wingArea = Number.parseFloat(controls.f2WingAreaSlider.value);
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2LiftSlider.addEventListener("input", () => {
+    flock2Flight.liftFactor = Number.parseFloat(controls.f2LiftSlider.value);
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2AeroDragSlider.addEventListener("input", () => {
+    flock2Flight.dragFactor = Number.parseFloat(
+      controls.f2AeroDragSlider.value,
+    );
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2ThrustSlider.addEventListener("input", () => {
+    flock2Flight.thrust = Number.parseFloat(controls.f2ThrustSlider.value);
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2MinSpeedSlider.addEventListener("input", () => {
+    flock2Flight.minSpeed = Number.parseFloat(controls.f2MinSpeedSlider.value);
+    if (flock2Flight.minSpeed > flock2Flight.maxSpeed) {
+      flock2Flight.maxSpeed = flock2Flight.minSpeed;
+    }
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2MaxSpeedSlider.addEventListener("input", () => {
+    flock2Flight.maxSpeed = Number.parseFloat(controls.f2MaxSpeedSlider.value);
+    if (flock2Flight.maxSpeed < flock2Flight.minSpeed) {
+      flock2Flight.minSpeed = flock2Flight.maxSpeed;
+    }
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2GravitySlider.addEventListener("input", () => {
+    flock2Flight.gravity = Number.parseFloat(controls.f2GravitySlider.value);
+    applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.f2AirDensitySlider.addEventListener("input", () => {
+    flock2Flight.airDensity = Number.parseFloat(
+      controls.f2AirDensitySlider.value,
+    );
+    applyActiveModelSettings();
     updateDebugState();
   });
 
@@ -306,7 +569,10 @@ async function start(): Promise<void> {
   });
 
   controls.paletteButton.addEventListener("click", () => {
-    const nextPaletteIndex = pickRandomPaletteIndex(activePaletteIndex, RANDOM_PALETTES.length);
+    const nextPaletteIndex = pickRandomPaletteIndex(
+      activePaletteIndex,
+      RANDOM_PALETTES.length,
+    );
     activePaletteIndex = nextPaletteIndex;
     const basePalette = RANDOM_PALETTES[nextPaletteIndex];
     applyPalette({
@@ -343,6 +609,7 @@ async function start(): Promise<void> {
     setTimeout(scheduleResize, 260);
   });
   applyResize();
+  applyActiveModelSettings();
 
   let previousTime = performance.now();
   let accumulatorSeconds = 0;
@@ -381,7 +648,12 @@ async function start(): Promise<void> {
 
     const positions = sim.getPositions();
     const renderStartMs = performance.now();
-    view.render(positions, zEnabled ? sim.getDepth() : undefined, renderStride, activeBoids);
+    view.render(
+      positions,
+      zEnabled ? sim.getDepth() : undefined,
+      renderStride,
+      activeBoids,
+    );
     const renderMs = performance.now() - renderStartMs;
     const frameMs = performance.now() - frameStartMs;
 
@@ -442,7 +714,15 @@ async function start(): Promise<void> {
 
 void start();
 
-function createDebugControls(host: HTMLElement, maxBirds: number): {
+function createDebugControls(
+  host: HTMLElement,
+  maxBirds: number,
+): {
+  modelSelect: HTMLSelectElement;
+  modelValueLabel: HTMLSpanElement;
+  classicRows: HTMLDivElement[];
+  flock2SocialRows: HTMLDivElement[];
+  flock2FlightRows: HTMLDivElement[];
   xBoundsButton: HTMLButtonElement;
   yBoundsButton: HTMLButtonElement;
   zBoundsButton: HTMLButtonElement;
@@ -466,6 +746,45 @@ function createDebugControls(host: HTMLElement, maxBirds: number): {
   hardMinDistanceValueLabel: HTMLSpanElement;
   jitterSlider: HTMLInputElement;
   jitterValueLabel: HTMLSpanElement;
+  f2NeighborRadiusSlider: HTMLInputElement;
+  f2NeighborRadiusValueLabel: HTMLSpanElement;
+  f2TopologicalSlider: HTMLInputElement;
+  f2TopologicalValueLabel: HTMLSpanElement;
+  f2FovSlider: HTMLInputElement;
+  f2FovValueLabel: HTMLSpanElement;
+  f2AvoidSlider: HTMLInputElement;
+  f2AvoidValueLabel: HTMLSpanElement;
+  f2AlignSlider: HTMLInputElement;
+  f2AlignValueLabel: HTMLSpanElement;
+  f2CohesionSlider: HTMLInputElement;
+  f2CohesionValueLabel: HTMLSpanElement;
+  f2BoundaryWeightSlider: HTMLInputElement;
+  f2BoundaryWeightValueLabel: HTMLSpanElement;
+  f2BoundaryCountSlider: HTMLInputElement;
+  f2BoundaryCountValueLabel: HTMLSpanElement;
+  f2ReactionSlider: HTMLInputElement;
+  f2ReactionValueLabel: HTMLSpanElement;
+  f2StabilitySlider: HTMLInputElement;
+  f2StabilityValueLabel: HTMLSpanElement;
+  f2MassSlider: HTMLInputElement;
+  f2MassValueLabel: HTMLSpanElement;
+  f2WingAreaSlider: HTMLInputElement;
+  f2WingAreaValueLabel: HTMLSpanElement;
+  f2LiftSlider: HTMLInputElement;
+  f2LiftValueLabel: HTMLSpanElement;
+  f2AeroDragSlider: HTMLInputElement;
+  f2AeroDragValueLabel: HTMLSpanElement;
+  f2ThrustSlider: HTMLInputElement;
+  f2ThrustValueLabel: HTMLSpanElement;
+  f2MinSpeedSlider: HTMLInputElement;
+  f2MinSpeedValueLabel: HTMLSpanElement;
+  f2MaxSpeedSlider: HTMLInputElement;
+  f2MaxSpeedValueLabel: HTMLSpanElement;
+  f2GravitySlider: HTMLInputElement;
+  f2GravityValueLabel: HTMLSpanElement;
+  f2AirDensitySlider: HTMLInputElement;
+  f2AirDensityValueLabel: HTMLSpanElement;
+  controlHelp: HTMLDivElement;
   profileStats: HTMLPreElement;
 } {
   const panel = document.createElement("div");
@@ -486,23 +805,72 @@ function createDebugControls(host: HTMLElement, maxBirds: number): {
   buttonRow.style.gap = "4px";
   buttonRow.style.flexWrap = "wrap";
 
+  const modelRow = document.createElement("div");
+  modelRow.style.display = "flex";
+  modelRow.style.alignItems = "center";
+  modelRow.style.gap = "4px";
+
+  const modelSelect = document.createElement("select");
+  modelSelect.style.height = "20px";
+  modelSelect.style.border = "1px solid rgba(187, 208, 234, 0.65)";
+  modelSelect.style.borderRadius = "4px";
+  modelSelect.style.background = "rgba(6, 10, 18, 0.9)";
+  modelSelect.style.color = "#e6f0ff";
+  modelSelect.style.font =
+    '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+  modelSelect.style.padding = "0 6px";
+  modelSelect.style.cursor = "pointer";
+  modelSelect.title = "Select active simulation model.";
+
+  const modelOptions: Array<{ value: SimModelKind; label: string }> = [
+    { value: "classic", label: "Classic" },
+    { value: "flock2-social", label: "F2 Social" },
+    { value: "flock2-social-flight", label: "F2 Social+Flight" },
+    { value: "f2-lite-social", label: "F2 Lite Social" },
+    { value: "f2-lite-social-flight", label: "F2 Lite Social+Flight" },
+  ];
+  modelOptions.forEach((option) => {
+    const node = document.createElement("option");
+    node.value = option.value;
+    node.textContent = option.label;
+    modelSelect.appendChild(node);
+  });
+
+  const modelValueLabel = document.createElement("span");
+  modelValueLabel.textContent = "Flockround Classic";
+  modelValueLabel.style.display = "inline-flex";
+  modelValueLabel.style.alignItems = "center";
+  modelValueLabel.style.height = "20px";
+  modelValueLabel.style.padding = "0 4px";
+  modelValueLabel.style.color = "#e6f0ff";
+  modelValueLabel.style.font =
+    '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+  modelRow.append(modelSelect, modelValueLabel);
+
   const sliderStack = document.createElement("div");
   sliderStack.style.display = "flex";
   sliderStack.style.flexDirection = "column";
   sliderStack.style.gap = "3px";
+  const classicRows: HTMLDivElement[] = [];
+  const flock2SocialRows: HTMLDivElement[] = [];
+  const flock2FlightRows: HTMLDivElement[] = [];
 
   const xBoundsButton = createDebugButton("X: Wrap");
-  xBoundsButton.title = "X-axis boundary mode: Wrap teleports at edges, Bounce reflects velocity.";
+  xBoundsButton.title =
+    "X-axis boundary mode: Wrap teleports at edges, Bounce reflects velocity.";
   const yBoundsButton = createDebugButton("Y: Wrap");
-  yBoundsButton.title = "Y-axis boundary mode: Wrap teleports at edges, Bounce reflects velocity.";
+  yBoundsButton.title =
+    "Y-axis boundary mode: Wrap teleports at edges, Bounce reflects velocity.";
   const zBoundsButton = createDebugButton("Z: Bounce");
-  zBoundsButton.title = "Z-axis boundary mode: Wrap teleports at edges, Bounce reflects velocity.";
+  zBoundsButton.title =
+    "Z-axis boundary mode: Wrap teleports at edges, Bounce reflects velocity.";
   const zModeButton = createDebugButton("Z Mode: On");
   zModeButton.title = "Enable or disable depth simulation (3D movement).";
   const mathModeButton = createDebugButton(
     DEFAULT_MATH_MODE === "fast" ? "Math: Fast" : "Math: Accurate",
   );
-  mathModeButton.title = "Math path for vector ops: Accurate favors precision, Fast favors speed.";
+  mathModeButton.title =
+    "Math path for vector ops: Accurate favors precision, Fast favors speed.";
   const profileButton = createDebugButton("Profile: On");
   profileButton.title = "Toggle runtime performance metrics overlay.";
   const paletteButton = createDebugButton("Palette: Random");
@@ -588,8 +956,7 @@ function createDebugControls(host: HTMLElement, maxBirds: number): {
   dragSlider.title = "g: normalized drag 0..1 (maps to 0..6 1/s damping).";
 
   const dragValueLabel = document.createElement("span");
-  dragValueLabel.textContent =
-    `g=${rangeToNormalized(DEFAULT_DRAG, DRAG_UI_MAX).toFixed(3)} (${DEFAULT_DRAG.toFixed(3)})`;
+  dragValueLabel.textContent = `g=${rangeToNormalized(DEFAULT_DRAG, DRAG_UI_MAX).toFixed(3)} (${DEFAULT_DRAG.toFixed(3)})`;
   dragValueLabel.style.display = "inline-flex";
   dragValueLabel.style.alignItems = "center";
   dragValueLabel.style.height = "20px";
@@ -608,7 +975,8 @@ function createDebugControls(host: HTMLElement, maxBirds: number): {
   renderSlider.style.height = "20px";
   renderSlider.style.margin = "0";
   renderSlider.style.cursor = "pointer";
-  renderSlider.title = "draw: render stride; 1 draws all boids, higher values draw fewer.";
+  renderSlider.title =
+    "draw: render stride; 1 draws all boids, higher values draw fewer.";
 
   const renderValueLabel = document.createElement("span");
   renderValueLabel.textContent = "draw 1/1";
@@ -630,7 +998,8 @@ function createDebugControls(host: HTMLElement, maxBirds: number): {
   minDistanceSlider.style.height = "20px";
   minDistanceSlider.style.margin = "0";
   minDistanceSlider.style.cursor = "pointer";
-  minDistanceSlider.title = "d: soft minimum separation (boids force shaping) in world units.";
+  minDistanceSlider.title =
+    "d: soft minimum separation (boids force shaping) in world units.";
 
   const minDistanceValueLabel = document.createElement("span");
   minDistanceValueLabel.textContent = `d=${DEFAULT_MIN_DISTANCE.toFixed(3)}`;
@@ -711,20 +1080,7 @@ function createDebugControls(host: HTMLElement, maxBirds: number): {
   controlHelp.style.font =
     '500 9px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
   controlHelp.style.whiteSpace = "pre";
-  controlHelp.textContent = [
-    "X/Y/Z: axis boundary mode (Wrap or Bounce)",
-    "Z Mode: enable depth simulation",
-    "Math: vector math mode (Accurate/Fast)",
-    "Palette: randomize bird and background colors",
-    "k: neighbors sampled per boid (inf = uncapped)",
-    "n: active bird count",
-    "f: max steering force clamp",
-    "g: normalized drag (0..1 -> 0..6 1/s)",
-    "draw: render stride (1 = draw all boids)",
-    "d: soft minimum separation distance",
-    "h: hard post-step minimum distance floor",
-    "j: random steering jitter",
-  ].join("\n");
+  controlHelp.textContent = modelLegendText(DEFAULT_MODEL_KIND);
 
   const buttons = [
     xBoundsButton,
@@ -742,7 +1098,8 @@ function createDebugControls(host: HTMLElement, maxBirds: number): {
     button.style.borderRadius = "4px";
     button.style.background = "rgba(6, 10, 18, 0.9)";
     button.style.color = "#e6f0ff";
-    button.style.font = '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+    button.style.font =
+      '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
     button.style.cursor = "pointer";
     button.style.backdropFilter = "blur(1px)";
   }
@@ -763,21 +1120,283 @@ function createDebugControls(host: HTMLElement, maxBirds: number): {
     return row;
   };
 
-  sliderStack.append(
-    createSliderRow(kSlider, kValueLabel),
-    createSliderRow(birdCountSlider, birdCountValueLabel),
-    createSliderRow(maxForceSlider, maxForceValueLabel),
-    createSliderRow(dragSlider, dragValueLabel),
-    createSliderRow(renderSlider, renderValueLabel),
-    createSliderRow(minDistanceSlider, minDistanceValueLabel),
-    createSliderRow(hardMinDistanceSlider, hardMinDistanceValueLabel),
-    createSliderRow(jitterSlider, jitterValueLabel),
+  const createF2Slider = (
+    min: string,
+    max: string,
+    step: string,
+    value: string,
+    title: string,
+    label: string,
+  ): {
+    slider: HTMLInputElement;
+    valueLabel: HTMLSpanElement;
+    row: HTMLDivElement;
+  } => {
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = min;
+    slider.max = max;
+    slider.step = step;
+    slider.value = value;
+    slider.style.width = "90px";
+    slider.style.height = "20px";
+    slider.style.margin = "0";
+    slider.style.cursor = "pointer";
+    slider.title = title;
+
+    const valueLabel = document.createElement("span");
+    valueLabel.textContent = label;
+    valueLabel.style.display = "inline-flex";
+    valueLabel.style.alignItems = "center";
+    valueLabel.style.height = "20px";
+    valueLabel.style.padding = "0 4px";
+    valueLabel.style.color = "#e6f0ff";
+    valueLabel.style.font =
+      '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
+    const row = createSliderRow(slider, valueLabel);
+    return { slider, valueLabel, row };
+  };
+
+  const f2NeighborRadius = createF2Slider(
+    "0.010",
+    "0.500",
+    "0.001",
+    "0.100",
+    "F2 neighbor radius.",
+    "r=0.100",
+  );
+  const f2Topological = createF2Slider(
+    "1",
+    "32",
+    "1",
+    "7",
+    "F2 topological neighbors.",
+    "k=7",
+  );
+  const f2Fov = createF2Slider(
+    "30",
+    "360",
+    "1",
+    "290",
+    "F2 field of view in degrees.",
+    "fov=290",
+  );
+  const f2Avoid = createF2Slider(
+    "0.000",
+    "2.000",
+    "0.001",
+    "0.020",
+    "F2 avoidance strength.",
+    "av=0.020",
+  );
+  const f2Align = createF2Slider(
+    "0.000",
+    "2.000",
+    "0.001",
+    "0.600",
+    "F2 alignment strength.",
+    "al=0.600",
+  );
+  const f2Cohesion = createF2Slider(
+    "0.000",
+    "2.000",
+    "0.001",
+    "0.004",
+    "F2 cohesion strength.",
+    "co=0.004",
+  );
+  const f2BoundaryWeight = createF2Slider(
+    "0.000",
+    "2.000",
+    "0.001",
+    "0.100",
+    "F2 boundary strength.",
+    "bw=0.100",
+  );
+  const f2BoundaryCount = createF2Slider(
+    "0.0",
+    "256.0",
+    "0.5",
+    "20.0",
+    "F2 boundary count term.",
+    "bc=20.0",
+  );
+  const f2Reaction = createF2Slider(
+    "25",
+    "2000",
+    "1",
+    "250",
+    "F2 reaction speed in ms.",
+    "rt=250ms",
+  );
+  const f2Stability = createF2Slider(
+    "0.000",
+    "1.000",
+    "0.001",
+    "0.700",
+    "F2 dynamic stability.",
+    "ds=0.700",
+  );
+  const f2Mass = createF2Slider(
+    "0.010",
+    "5.000",
+    "0.001",
+    "0.080",
+    "Mass (kg).",
+    "m=0.080",
+  );
+  const f2WingArea = createF2Slider(
+    "0.0010",
+    "1.0000",
+    "0.0001",
+    "0.0224",
+    "Wing area.",
+    "A=0.0224",
+  );
+  const f2Lift = createF2Slider(
+    "0.000",
+    "2.000",
+    "0.001",
+    "0.571",
+    "Lift coefficient factor.",
+    "cl=0.571",
+  );
+  const f2AeroDrag = createF2Slider(
+    "0.000",
+    "2.000",
+    "0.001",
+    "0.173",
+    "Drag coefficient factor.",
+    "cd=0.173",
+  );
+  const f2Thrust = createF2Slider(
+    "0.000",
+    "20.000",
+    "0.001",
+    "0.237",
+    "Thrust scalar.",
+    "th=0.237",
+  );
+  const f2MinSpeed = createF2Slider(
+    "0.00",
+    "200.00",
+    "0.01",
+    "5.00",
+    "Minimum speed.",
+    "vmin=5.00",
+  );
+  const f2MaxSpeed = createF2Slider(
+    "0.00",
+    "250.00",
+    "0.01",
+    "18.00",
+    "Maximum speed.",
+    "vmax=18.00",
+  );
+  const f2Gravity = createF2Slider(
+    "0.00",
+    "30.00",
+    "0.01",
+    "9.80",
+    "Gravity.",
+    "g=9.80",
+  );
+  const f2AirDensity = createF2Slider(
+    "0.100",
+    "3.000",
+    "0.001",
+    "1.225",
+    "Air density.",
+    "rho=1.225",
   );
 
-  panel.append(buttonRow, sliderStack, controlHelp, profileStats);
+  const kRow = createSliderRow(kSlider, kValueLabel);
+  const birdCountRow = createSliderRow(birdCountSlider, birdCountValueLabel);
+  const maxForceRow = createSliderRow(maxForceSlider, maxForceValueLabel);
+  const dragRow = createSliderRow(dragSlider, dragValueLabel);
+  const renderRow = createSliderRow(renderSlider, renderValueLabel);
+  const minDistanceRow = createSliderRow(
+    minDistanceSlider,
+    minDistanceValueLabel,
+  );
+  const hardMinDistanceRow = createSliderRow(
+    hardMinDistanceSlider,
+    hardMinDistanceValueLabel,
+  );
+  const jitterRow = createSliderRow(jitterSlider, jitterValueLabel);
+
+  classicRows.push(
+    kRow,
+    maxForceRow,
+    dragRow,
+    minDistanceRow,
+    hardMinDistanceRow,
+    jitterRow,
+  );
+  flock2SocialRows.push(
+    f2NeighborRadius.row,
+    f2Topological.row,
+    f2Fov.row,
+    f2Avoid.row,
+    f2Align.row,
+    f2Cohesion.row,
+    f2BoundaryWeight.row,
+    f2BoundaryCount.row,
+  );
+  flock2FlightRows.push(
+    f2Reaction.row,
+    f2Stability.row,
+    f2Mass.row,
+    f2WingArea.row,
+    f2Lift.row,
+    f2AeroDrag.row,
+    f2Thrust.row,
+    f2MinSpeed.row,
+    f2MaxSpeed.row,
+    f2Gravity.row,
+    f2AirDensity.row,
+  );
+
+  sliderStack.append(
+    kRow,
+    birdCountRow,
+    maxForceRow,
+    dragRow,
+    renderRow,
+    minDistanceRow,
+    hardMinDistanceRow,
+    jitterRow,
+    f2NeighborRadius.row,
+    f2Topological.row,
+    f2Fov.row,
+    f2Avoid.row,
+    f2Align.row,
+    f2Cohesion.row,
+    f2BoundaryWeight.row,
+    f2BoundaryCount.row,
+    f2Reaction.row,
+    f2Stability.row,
+    f2Mass.row,
+    f2WingArea.row,
+    f2Lift.row,
+    f2AeroDrag.row,
+    f2Thrust.row,
+    f2MinSpeed.row,
+    f2MaxSpeed.row,
+    f2Gravity.row,
+    f2AirDensity.row,
+  );
+
+  panel.append(modelRow, buttonRow, sliderStack, controlHelp, profileStats);
   host.appendChild(panel);
 
   return {
+    modelSelect,
+    modelValueLabel,
+    classicRows,
+    flock2SocialRows,
+    flock2FlightRows,
     xBoundsButton,
     yBoundsButton,
     zBoundsButton,
@@ -801,8 +1420,105 @@ function createDebugControls(host: HTMLElement, maxBirds: number): {
     hardMinDistanceValueLabel,
     jitterSlider,
     jitterValueLabel,
+    f2NeighborRadiusSlider: f2NeighborRadius.slider,
+    f2NeighborRadiusValueLabel: f2NeighborRadius.valueLabel,
+    f2TopologicalSlider: f2Topological.slider,
+    f2TopologicalValueLabel: f2Topological.valueLabel,
+    f2FovSlider: f2Fov.slider,
+    f2FovValueLabel: f2Fov.valueLabel,
+    f2AvoidSlider: f2Avoid.slider,
+    f2AvoidValueLabel: f2Avoid.valueLabel,
+    f2AlignSlider: f2Align.slider,
+    f2AlignValueLabel: f2Align.valueLabel,
+    f2CohesionSlider: f2Cohesion.slider,
+    f2CohesionValueLabel: f2Cohesion.valueLabel,
+    f2BoundaryWeightSlider: f2BoundaryWeight.slider,
+    f2BoundaryWeightValueLabel: f2BoundaryWeight.valueLabel,
+    f2BoundaryCountSlider: f2BoundaryCount.slider,
+    f2BoundaryCountValueLabel: f2BoundaryCount.valueLabel,
+    f2ReactionSlider: f2Reaction.slider,
+    f2ReactionValueLabel: f2Reaction.valueLabel,
+    f2StabilitySlider: f2Stability.slider,
+    f2StabilityValueLabel: f2Stability.valueLabel,
+    f2MassSlider: f2Mass.slider,
+    f2MassValueLabel: f2Mass.valueLabel,
+    f2WingAreaSlider: f2WingArea.slider,
+    f2WingAreaValueLabel: f2WingArea.valueLabel,
+    f2LiftSlider: f2Lift.slider,
+    f2LiftValueLabel: f2Lift.valueLabel,
+    f2AeroDragSlider: f2AeroDrag.slider,
+    f2AeroDragValueLabel: f2AeroDrag.valueLabel,
+    f2ThrustSlider: f2Thrust.slider,
+    f2ThrustValueLabel: f2Thrust.valueLabel,
+    f2MinSpeedSlider: f2MinSpeed.slider,
+    f2MinSpeedValueLabel: f2MinSpeed.valueLabel,
+    f2MaxSpeedSlider: f2MaxSpeed.slider,
+    f2MaxSpeedValueLabel: f2MaxSpeed.valueLabel,
+    f2GravitySlider: f2Gravity.slider,
+    f2GravityValueLabel: f2Gravity.valueLabel,
+    f2AirDensitySlider: f2AirDensity.slider,
+    f2AirDensityValueLabel: f2AirDensity.valueLabel,
+    controlHelp,
     profileStats,
   };
+}
+
+function modelKindLabel(modelKind: SimModelKind): string {
+  switch (modelKind) {
+    case "classic":
+      return "Flockround Classic";
+    case "flock2-social":
+      return "Flock2 Social";
+    case "flock2-social-flight":
+      return "Flock2 Social+Flight";
+    case "f2-lite-social":
+      return "F2 Lite Social";
+    case "f2-lite-social-flight":
+      return "F2 Lite Social+Flight";
+  }
+}
+
+function modelLegendText(modelKind: SimModelKind): string {
+  const baseLines = [
+    "X/Y/Z: axis boundary mode (Wrap or Bounce)",
+    "Z Mode: enable depth simulation",
+    "Math: vector math mode (Accurate/Fast)",
+    "Palette: randomize bird and background colors",
+    "n: active bird count",
+    "draw: render stride (1 = draw all boids)",
+  ];
+  const classicLines = [
+    "Model: Flockround Classic",
+    "k: neighbors sampled per boid (inf = uncapped)",
+    "f: max steering force clamp",
+    "g: normalized drag (0..1 -> 0..6 1/s)",
+    "d: soft minimum separation distance",
+    "h: hard post-step minimum distance floor",
+    "j: random steering jitter",
+  ];
+  const socialLines = [
+    `Model: ${modelKindLabel(modelKind)}`,
+    "r: metric neighbor radius",
+    "k: topological neighbor count",
+    "fov: field of view in degrees",
+    "av/al/co: avoid/align/cohesion weights",
+    "bw/bc: boundary weight and crowding term",
+  ];
+  const flightLines = [
+    "rt: reaction time (ms), ds: stability",
+    "m/A: mass and wing area",
+    "cl/cd/th: lift, drag, thrust factors",
+    "vmin/vmax: speed clamp",
+    "g/rho: gravity and air density",
+  ];
+
+  if (modelKind === "classic") {
+    return [...classicLines, ...baseLines].join("\n");
+  }
+  if (modelKind === "flock2-social" || modelKind === "f2-lite-social") {
+    return [...socialLines, ...baseLines].join("\n");
+  }
+  return [...socialLines, ...flightLines, ...baseLines].join("\n");
 }
 
 function createDebugButton(label: string): HTMLButtonElement {
@@ -817,7 +1533,9 @@ function setButtonState(button: HTMLButtonElement, active: boolean): void {
   button.style.borderColor = active
     ? "rgba(133, 191, 255, 0.95)"
     : "rgba(187, 208, 234, 0.65)";
-  button.style.background = active ? "rgba(21, 55, 90, 0.95)" : "rgba(6, 10, 18, 0.9)";
+  button.style.background = active
+    ? "rgba(21, 55, 90, 0.95)"
+    : "rgba(6, 10, 18, 0.9)";
   button.style.color = active ? "#ffffff" : "#e6f0ff";
 }
 
@@ -848,7 +1566,11 @@ function randomBirdColor(): number {
   return hslToRgbNumber(hue, saturation, lightness);
 }
 
-function hslToRgbNumber(hueDegrees: number, saturation: number, lightness: number): number {
+function hslToRgbNumber(
+  hueDegrees: number,
+  saturation: number,
+  lightness: number,
+): number {
   const h = ((hueDegrees % 360) + 360) % 360;
   const s = clamp01(saturation);
   const l = clamp01(lightness);
@@ -1019,15 +1741,19 @@ function createLoopProfiler(output: HTMLPreElement): {
     const jsOtherMs = Math.max(0, frameAvgMs - simAvgMs - renderAvgMs);
     const simStepsAvg = simStepsSum / frameCount;
     const neighborsAvg = Math.round(neighborsVisitedSum / frameCount);
-    const neighborsPerBoid = sample.activeBoids > 0 ? neighborsAvg / sample.activeBoids : 0;
+    const neighborsPerBoid =
+      sample.activeBoids > 0 ? neighborsAvg / sample.activeBoids : 0;
 
-    const fpsLevel: MetricLevel = fps >= 55 ? "good" : fps >= 30 ? "warn" : "bad";
+    const fpsLevel: MetricLevel =
+      fps >= 55 ? "good" : fps >= 30 ? "warn" : "bad";
     const frameLevel: MetricLevel =
       frameAvgMs <= 16.7 ? "good" : frameAvgMs <= 33.3 ? "warn" : "bad";
-    const simLevel: MetricLevel = simAvgMs <= 8 ? "good" : simAvgMs <= 16 ? "warn" : "bad";
+    const simLevel: MetricLevel =
+      simAvgMs <= 8 ? "good" : simAvgMs <= 16 ? "warn" : "bad";
     const renderLevel: MetricLevel =
       renderAvgMs <= 2 ? "good" : renderAvgMs <= 6 ? "warn" : "bad";
-    const jsOtherLevel: MetricLevel = jsOtherMs <= 2 ? "good" : jsOtherMs <= 8 ? "warn" : "bad";
+    const jsOtherLevel: MetricLevel =
+      jsOtherMs <= 2 ? "good" : jsOtherMs <= 8 ? "warn" : "bad";
     const maxFrameLevel: MetricLevel =
       frameMsMax <= 20 ? "good" : frameMsMax <= 40 ? "warn" : "bad";
     const stepsLevel: MetricLevel =
@@ -1045,7 +1771,12 @@ function createLoopProfiler(output: HTMLPreElement): {
     const neighborsLoad = clamp01(neighborsPerBoid / 96);
 
     output.innerHTML = [
-      formatMetricLine("fps", fps.toFixed(1), fpsLevel, renderMixerBar(fpsLoad)),
+      formatMetricLine(
+        "fps",
+        fps.toFixed(1),
+        fpsLevel,
+        renderMixerBar(fpsLoad),
+      ),
       formatMetricLine(
         "frame",
         `${frameAvgMs.toFixed(2)}ms`,

@@ -1,6 +1,10 @@
+mod flock2;
 mod math;
+mod model_classic;
+mod model_flock2;
 mod neighbor_grid;
 
+use flock2::{normalize_or_default, Flock2Config};
 use math::MathMode;
 use neighbor_grid::NeighborGrid;
 use std::f32::consts::TAU;
@@ -36,6 +40,37 @@ const MAX_DRAG: f32 = 6.0;
 const DEFAULT_DRAG: f32 = 0.0;
 const HARD_CONSTRAINT_RELAXATION: f32 = 0.05;
 const HARD_CONSTRAINT_MAX_PUSH: f32 = 0.0025;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModelKind {
+    Classic,
+    Flock2Social,
+    Flock2SocialFlight,
+    Flock2LiteSocial,
+    Flock2LiteSocialFlight,
+}
+
+impl ModelKind {
+    fn from_u32(value: u32) -> Self {
+        match value {
+            1 => Self::Flock2Social,
+            2 => Self::Flock2SocialFlight,
+            3 => Self::Flock2LiteSocial,
+            4 => Self::Flock2LiteSocialFlight,
+            _ => Self::Classic,
+        }
+    }
+
+    fn as_u32(self) -> u32 {
+        match self {
+            Self::Classic => 0,
+            Self::Flock2Social => 1,
+            Self::Flock2SocialFlight => 2,
+            Self::Flock2LiteSocial => 3,
+            Self::Flock2LiteSocialFlight => 4,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct Lcg32 {
@@ -162,7 +197,9 @@ pub struct Sim {
     active_count: usize,
     width: f32,
     height: f32,
+    model_kind: ModelKind,
     config: SimConfig,
+    flock2_config: Flock2Config,
     bounce_x: bool,
     bounce_y: bool,
     bounce_z: bool,
@@ -174,6 +211,9 @@ pub struct Sim {
     vel_x: Vec<f32>,
     vel_y: Vec<f32>,
     vel_z: Vec<f32>,
+    heading_x: Vec<f32>,
+    heading_y: Vec<f32>,
+    heading_z: Vec<f32>,
     accel_x: Vec<f32>,
     accel_y: Vec<f32>,
     accel_z: Vec<f32>,
@@ -191,6 +231,7 @@ impl Sim {
         let width = width.max(MIN_BOUND);
         let height = height.max(MIN_BOUND);
         let config = SimConfig::default();
+        let flock2_config = Flock2Config::default();
         let mut rng = Lcg32::new(seed);
 
         let mut pos_x = vec![0.0; count];
@@ -199,6 +240,9 @@ impl Sim {
         let mut vel_x = vec![0.0; count];
         let mut vel_y = vec![0.0; count];
         let mut vel_z = vec![0.0; count];
+        let mut heading_x = vec![0.0; count];
+        let mut heading_y = vec![0.0; count];
+        let mut heading_z = vec![0.0; count];
         let mut render_xy = vec![0.0; count * 2];
         let mut render_z = vec![DEFAULT_Z_LAYER; count];
 
@@ -212,6 +256,10 @@ impl Sim {
             vel_x[i] = angle.cos() * speed;
             vel_y[i] = angle.sin() * speed;
             vel_z[i] = (rng.next_f32() * 2.0 - 1.0) * speed * 0.35;
+            let (hx, hy, hz) = normalize_or_default(vel_x[i], vel_y[i], vel_z[i], 1.0, 0.0, 0.0);
+            heading_x[i] = hx;
+            heading_y[i] = hy;
+            heading_z[i] = hz;
 
             let base = 2 * i;
             render_xy[base] = pos_x[i];
@@ -224,7 +272,9 @@ impl Sim {
             active_count: count,
             width,
             height,
+            model_kind: ModelKind::Classic,
             config,
+            flock2_config,
             bounce_x: false,
             bounce_y: false,
             bounce_z: false,
@@ -236,6 +286,9 @@ impl Sim {
             vel_x,
             vel_y,
             vel_z,
+            heading_x,
+            heading_y,
+            heading_z,
             accel_x: vec![0.0; count],
             accel_y: vec![0.0; count],
             accel_z: vec![0.0; count],
@@ -279,6 +332,75 @@ impl Sim {
 
         self.neighbor_grid
             .set_cell_size(self.config.neighbor_radius);
+    }
+
+    pub fn set_model_kind(&mut self, kind: u32) {
+        let next_kind = ModelKind::from_u32(kind);
+        if self.model_kind == next_kind {
+            return;
+        }
+
+        self.model_kind = next_kind;
+        self.reseed_velocity_for_model();
+    }
+
+    pub fn model_kind(&self) -> u32 {
+        self.model_kind.as_u32()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_flock2_social_config(
+        &mut self,
+        avoid_weight: f32,
+        align_weight: f32,
+        cohesion_weight: f32,
+        boundary_weight: f32,
+        boundary_count: f32,
+        neighbor_radius: f32,
+        topological_neighbors: usize,
+        field_of_view_deg: f32,
+    ) {
+        self.flock2_config.avoid_weight = avoid_weight;
+        self.flock2_config.align_weight = align_weight;
+        self.flock2_config.cohesion_weight = cohesion_weight;
+        self.flock2_config.boundary_weight = boundary_weight;
+        self.flock2_config.boundary_count = boundary_count;
+        self.flock2_config.neighbor_radius = neighbor_radius;
+        self.flock2_config.topological_neighbors = topological_neighbors;
+        self.flock2_config.field_of_view_deg = field_of_view_deg;
+        self.flock2_config.sanitize();
+        self.neighbor_grid
+            .set_cell_size(self.flock2_config.neighbor_radius);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_flock2_flight_config(
+        &mut self,
+        reaction_time_ms: f32,
+        dynamic_stability: f32,
+        mass: f32,
+        wing_area: f32,
+        lift_factor: f32,
+        drag_factor: f32,
+        thrust: f32,
+        min_speed: f32,
+        max_speed: f32,
+        gravity: f32,
+        air_density: f32,
+    ) {
+        self.flock2_config.reaction_time_ms = reaction_time_ms;
+        self.flock2_config.dynamic_stability = dynamic_stability;
+        self.flock2_config.mass = mass;
+        self.flock2_config.wing_area = wing_area;
+        self.flock2_config.lift_factor = lift_factor;
+        self.flock2_config.drag_factor = drag_factor;
+        self.flock2_config.thrust = thrust;
+        self.flock2_config.min_speed = min_speed;
+        self.flock2_config.max_speed = max_speed;
+        self.flock2_config.gravity = gravity;
+        self.flock2_config.air_density = air_density;
+        self.flock2_config.sanitize();
+        self.reseed_velocity_for_model();
     }
 
     pub fn set_z_mode(&mut self, enabled: bool) {
@@ -348,6 +470,26 @@ impl Sim {
         self.config.math_mode.as_u32()
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_classic_config(
+        &mut self,
+        math_mode: u32,
+        max_neighbors_sampled: usize,
+        max_force: f32,
+        drag: f32,
+        soft_min_distance: f32,
+        hard_min_distance: f32,
+        jitter_strength: f32,
+    ) {
+        self.set_math_mode(math_mode);
+        self.set_max_neighbors_sampled(max_neighbors_sampled);
+        self.set_max_force(max_force);
+        self.set_drag(drag);
+        self.set_min_distance(soft_min_distance);
+        self.set_hard_min_distance(hard_min_distance);
+        self.set_jitter_strength(jitter_strength);
+    }
+
     pub fn set_max_neighbors_sampled(&mut self, max_neighbors: usize) {
         self.config.max_neighbors_sampled = max_neighbors;
     }
@@ -361,12 +503,8 @@ impl Sim {
     }
 
     pub fn set_max_force(&mut self, max_force: f32) {
-        self.config.max_force = clamp_finite(
-            max_force,
-            MIN_MAX_FORCE,
-            MAX_MAX_FORCE,
-            DEFAULT_MAX_FORCE,
-        );
+        self.config.max_force =
+            clamp_finite(max_force, MIN_MAX_FORCE, MAX_MAX_FORCE, DEFAULT_MAX_FORCE);
     }
 
     pub fn max_force(&self) -> f32 {
@@ -427,143 +565,28 @@ impl Sim {
             return;
         }
 
-        self.step_index = self.step_index.wrapping_add(1);
-        self.neighbors_visited_last_step = 0;
-
-        // If steering cannot produce non-zero acceleration, skip neighbor/force work.
-        let steering_disabled = self.config.max_force <= EPSILON
-            || ((self.config.sep_weight <= EPSILON
-                && self.config.align_weight <= EPSILON
-                && self.config.coh_weight <= EPSILON)
-                && self.config.jitter_strength <= EPSILON);
-        let drag_damping = if self.config.drag <= EPSILON {
-            1.0
-        } else {
-            (-self.config.drag * dt).exp()
-        };
-
-        if steering_disabled {
-            for i in 0..self.active_count {
-                let vx = self.vel_x[i] * drag_damping;
-                let vy = self.vel_y[i] * drag_damping;
-                let vz = if self.z_mode_enabled {
-                    self.vel_z[i] * drag_damping
-                } else {
-                    0.0
-                };
-
-                let (x, vx) = integrate_axis(self.pos_x[i], vx, dt, self.bounce_x);
-                let (y, vy) = integrate_axis(self.pos_y[i], vy, dt, self.bounce_y);
-                let (z, vz) = if self.z_mode_enabled {
-                    integrate_axis(self.pos_z[i], vz, dt, self.bounce_z)
-                } else {
-                    (DEFAULT_Z_LAYER, 0.0)
-                };
-
-                self.vel_x[i] = vx;
-                self.vel_y[i] = vy;
-                self.vel_z[i] = if self.z_mode_enabled { vz } else { 0.0 };
-                self.pos_x[i] = x;
-                self.pos_y[i] = y;
-                self.pos_z[i] = z;
+        match self.model_kind {
+            ModelKind::Classic => {
+                self.step_classic(dt);
+                return;
             }
-
-            self.resolve_hard_min_distance_constraints();
-            self.sync_render_buffers();
-            self.debug_validate_state();
-            return;
-        }
-
-        self.neighbor_grid
-            .set_cell_size(self.config.neighbor_radius);
-        self.neighbor_grid
-            .rebuild(
-                &self.pos_x[..self.active_count],
-                &self.pos_y[..self.active_count],
-                WORLD_SIZE,
-                WORLD_SIZE,
-            );
-
-        for i in 0..self.active_count {
-            let (ax, ay, az, neighbors_used) = self.compute_boids_acceleration(i);
-            self.accel_x[i] = ax;
-            self.accel_y[i] = ay;
-            self.accel_z[i] = az;
-            self.neighbors_visited_last_step += neighbors_used;
-        }
-
-        for i in 0..self.active_count {
-            let mut vx = (self.vel_x[i] + self.accel_x[i] * dt) * drag_damping;
-            let mut vy = (self.vel_y[i] + self.accel_y[i] * dt) * drag_damping;
-            let mut vz = if self.z_mode_enabled {
-                (self.vel_z[i] + self.accel_z[i] * dt) * drag_damping
-            } else {
-                0.0
-            };
-
-            let speed_sq = if self.z_mode_enabled {
-                vx * vx + vy * vy + vz * vz
-            } else {
-                vx * vx + vy * vy
-            };
-
-            if speed_sq <= EPSILON {
-                if self.config.min_speed > 0.0 {
-                    vx = self.config.min_speed;
-                    vy = 0.0;
-                    vz = 0.0;
-                }
-            } else {
-                let min_speed_sq = self.config.min_speed * self.config.min_speed;
-                let max_speed_sq = self.config.max_speed * self.config.max_speed;
-                if speed_sq < min_speed_sq {
-                    let (nvx, nvy, nvz) = math::normalize_to_magnitude(
-                        self.config.math_mode,
-                        vx,
-                        vy,
-                        if self.z_mode_enabled { vz } else { 0.0 },
-                        self.config.min_speed,
-                    );
-                    vx = nvx;
-                    vy = nvy;
-                    if self.z_mode_enabled {
-                        vz = nvz;
-                    }
-                } else if speed_sq > max_speed_sq {
-                    let (nvx, nvy, nvz) = math::normalize_to_magnitude(
-                        self.config.math_mode,
-                        vx,
-                        vy,
-                        if self.z_mode_enabled { vz } else { 0.0 },
-                        self.config.max_speed,
-                    );
-                    vx = nvx;
-                    vy = nvy;
-                    if self.z_mode_enabled {
-                        vz = nvz;
-                    }
-                }
+            ModelKind::Flock2Social => {
+                self.step_flock2(dt, false);
+                return;
             }
-
-            let (x, vx) = integrate_axis(self.pos_x[i], vx, dt, self.bounce_x);
-            let (y, vy) = integrate_axis(self.pos_y[i], vy, dt, self.bounce_y);
-            let (z, vz) = if self.z_mode_enabled {
-                integrate_axis(self.pos_z[i], vz, dt, self.bounce_z)
-            } else {
-                (DEFAULT_Z_LAYER, 0.0)
-            };
-
-            self.vel_x[i] = vx;
-            self.vel_y[i] = vy;
-            self.vel_z[i] = if self.z_mode_enabled { vz } else { 0.0 };
-            self.pos_x[i] = x;
-            self.pos_y[i] = y;
-            self.pos_z[i] = z;
+            ModelKind::Flock2SocialFlight => {
+                self.step_flock2(dt, true);
+                return;
+            }
+            ModelKind::Flock2LiteSocial => {
+                self.step_flock2_lite(dt, false);
+                return;
+            }
+            ModelKind::Flock2LiteSocialFlight => {
+                self.step_flock2_lite(dt, true);
+                return;
+            }
         }
-
-        self.resolve_hard_min_distance_constraints();
-        self.sync_render_buffers();
-        self.debug_validate_state();
     }
 
     pub fn set_bounds(&mut self, width: f32, height: f32) {
@@ -613,13 +636,12 @@ impl Sim {
         let min_distance_sq = hard_min_distance * hard_min_distance;
 
         self.neighbor_grid.set_cell_size(hard_min_distance);
-        self.neighbor_grid
-            .rebuild(
-                &self.pos_x[..self.active_count],
-                &self.pos_y[..self.active_count],
-                WORLD_SIZE,
-                WORLD_SIZE,
-            );
+        self.neighbor_grid.rebuild(
+            &self.pos_x[..self.active_count],
+            &self.pos_y[..self.active_count],
+            WORLD_SIZE,
+            WORLD_SIZE,
+        );
 
         let mut neighbors = Vec::new();
         for i in 0..self.active_count {
@@ -652,7 +674,12 @@ impl Sim {
 
                 let (nx, ny, nz, dist) = if dist_sq > EPSILON {
                     let dist = dist_sq.sqrt();
-                    (dx / dist, dy / dist, if self.z_mode_enabled { dz / dist } else { 0.0 }, dist)
+                    (
+                        dx / dist,
+                        dy / dist,
+                        if self.z_mode_enabled { dz / dist } else { 0.0 },
+                        dist,
+                    )
                 } else {
                     let mut nx = hash_unit(self.step_index, i as u32, 0);
                     let mut ny = hash_unit(self.step_index, j as u32, 1);
@@ -703,179 +730,6 @@ impl Sim {
         }
     }
 
-    fn compute_boids_acceleration(&self, i: usize) -> (f32, f32, f32, usize) {
-        let wrap_x = !self.bounce_x;
-        let wrap_y = !self.bounce_y;
-        let wrap_z = !self.bounce_z;
-        let px = self.pos_x[i];
-        let py = self.pos_y[i];
-        let pz = self.pos_z[i];
-        let vx = self.vel_x[i];
-        let vy = self.vel_y[i];
-        let vz = self.vel_z[i];
-
-        let neighbor_radius_sq = self.config.neighbor_radius * self.config.neighbor_radius;
-        let separation_radius_sq = self.config.separation_radius * self.config.separation_radius;
-        let min_distance_sq = self.config.soft_min_distance * self.config.soft_min_distance;
-
-        let mut sep_x = 0.0;
-        let mut sep_y = 0.0;
-        let mut sep_z = 0.0;
-        let mut sep_count = 0usize;
-
-        let mut align_x = 0.0;
-        let mut align_y = 0.0;
-        let mut align_z = 0.0;
-
-        let mut coh_x = 0.0;
-        let mut coh_y = 0.0;
-        let mut coh_z = 0.0;
-
-        let mut neighbor_count = 0usize;
-        let mut neighbor_samples = 0usize;
-        let sample_cap = self.config.max_neighbors_sampled;
-
-        self.neighbor_grid.for_each_neighbor_with_wrap(
-            i,
-            self.config.neighbor_radius,
-            wrap_x,
-            wrap_y,
-            |j| {
-                if sample_cap > 0 && neighbor_samples >= sample_cap {
-                    return false;
-                }
-                neighbor_samples += 1;
-
-                let dx = axis_delta(self.pos_x[j] - px, wrap_x);
-                let dy = axis_delta(self.pos_y[j] - py, wrap_y);
-                let dz = if self.z_mode_enabled {
-                    axis_delta(self.pos_z[j] - pz, wrap_z)
-                } else {
-                    0.0
-                };
-                let dist_sq = math::distance_sq_3d(dx, dy, dz);
-
-                if dist_sq <= EPSILON || dist_sq > neighbor_radius_sq {
-                    return true;
-                }
-
-                neighbor_count += 1;
-                align_x += self.vel_x[j];
-                align_y += self.vel_y[j];
-                align_z += if self.z_mode_enabled {
-                    self.vel_z[j]
-                } else {
-                    0.0
-                };
-
-                coh_x += dx;
-                coh_y += dy;
-                coh_z += dz;
-
-                if dist_sq <= separation_radius_sq {
-                    let inv_dist_sq = 1.0 / dist_sq.max(EPSILON);
-                    sep_x -= dx * inv_dist_sq;
-                    sep_y -= dy * inv_dist_sq;
-                    sep_z -= dz * inv_dist_sq;
-
-                    if min_distance_sq > EPSILON && dist_sq < min_distance_sq {
-                        let hard_push_mag =
-                            self.config.soft_min_distance * (1.0 - dist_sq / min_distance_sq);
-                        let (hard_x, hard_y, hard_z) = math::normalize_to_magnitude(
-                            self.config.math_mode,
-                            -dx,
-                            -dy,
-                            if self.z_mode_enabled { -dz } else { 0.0 },
-                            hard_push_mag,
-                        );
-                        sep_x += hard_x;
-                        sep_y += hard_y;
-                        sep_z += hard_z;
-                    }
-
-                    sep_count += 1;
-                }
-
-                true
-            },
-        );
-
-        let mut force_x = 0.0;
-        let mut force_y = 0.0;
-        let mut force_z = 0.0;
-
-        if sep_count > 0 {
-            let n = sep_count as f32;
-            let (steer_x, steer_y, steer_z) = steer_towards_3d(
-                self.config.math_mode,
-                sep_x / n,
-                sep_y / n,
-                sep_z / n,
-                vx,
-                vy,
-                if self.z_mode_enabled { vz } else { 0.0 },
-                self.config.max_speed,
-            );
-            force_x += steer_x * self.config.sep_weight;
-            force_y += steer_y * self.config.sep_weight;
-            force_z += steer_z * self.config.sep_weight * self.z_force_scale;
-        }
-
-        if neighbor_count > 0 {
-            let n = neighbor_count as f32;
-
-            let (align_force_x, align_force_y, align_force_z) = steer_towards_3d(
-                self.config.math_mode,
-                align_x / n,
-                align_y / n,
-                align_z / n,
-                vx,
-                vy,
-                if self.z_mode_enabled { vz } else { 0.0 },
-                self.config.max_speed,
-            );
-            force_x += align_force_x * self.config.align_weight;
-            force_y += align_force_y * self.config.align_weight;
-            force_z += align_force_z * self.config.align_weight * self.z_force_scale;
-
-            let (coh_force_x, coh_force_y, coh_force_z) = steer_towards_3d(
-                self.config.math_mode,
-                coh_x / n,
-                coh_y / n,
-                coh_z / n,
-                vx,
-                vy,
-                if self.z_mode_enabled { vz } else { 0.0 },
-                self.config.max_speed,
-            );
-            force_x += coh_force_x * self.config.coh_weight;
-            force_y += coh_force_y * self.config.coh_weight;
-            force_z += coh_force_z * self.config.coh_weight * self.z_force_scale;
-        }
-
-        if !self.z_mode_enabled {
-            force_z = 0.0;
-        }
-
-        if self.config.jitter_strength > 0.0 {
-            force_x += hash_unit(self.step_index, i as u32, 0) * self.config.jitter_strength;
-            force_y += hash_unit(self.step_index, i as u32, 1) * self.config.jitter_strength;
-            if self.z_mode_enabled {
-                force_z += hash_unit(self.step_index, i as u32, 2) * self.config.jitter_strength;
-            }
-        }
-
-        let (fx, fy, fz) = math::limit_magnitude_3d(
-            self.config.math_mode,
-            force_x,
-            force_y,
-            force_z,
-            self.config.max_force,
-        );
-
-        (fx, fy, fz, neighbor_count)
-    }
-
     fn debug_validate_state(&self) {
         #[cfg(debug_assertions)]
         for i in 0..self.count {
@@ -888,6 +742,9 @@ impl Sim {
             debug_assert!(self.accel_x[i].is_finite());
             debug_assert!(self.accel_y[i].is_finite());
             debug_assert!(self.accel_z[i].is_finite());
+            debug_assert!(self.heading_x[i].is_finite());
+            debug_assert!(self.heading_y[i].is_finite());
+            debug_assert!(self.heading_z[i].is_finite());
             debug_assert!((0.0..=1.0).contains(&self.pos_x[i]));
             debug_assert!((0.0..=1.0).contains(&self.pos_y[i]));
             debug_assert!((0.0..=1.0).contains(&self.pos_z[i]));

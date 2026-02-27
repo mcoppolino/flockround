@@ -23,6 +23,48 @@ export interface SimBoidsConfig {
 }
 
 export type SimMathMode = "accurate" | "fast";
+export type SimModelKind =
+  | "classic"
+  | "flock2-social"
+  | "flock2-social-flight"
+  | "f2-lite-social"
+  | "f2-lite-social-flight";
+
+export interface Flock2SocialConfig {
+  avoidWeight: number;
+  alignWeight: number;
+  cohesionWeight: number;
+  boundaryWeight: number;
+  boundaryCount: number;
+  neighborRadius: number;
+  topologicalNeighbors: number;
+  fieldOfViewDeg: number;
+}
+
+export interface Flock2FlightConfig {
+  reactionTimeMs: number;
+  dynamicStability: number;
+  mass: number;
+  wingArea: number;
+  liftFactor: number;
+  dragFactor: number;
+  thrust: number;
+  minSpeed: number;
+  maxSpeed: number;
+  gravity: number;
+  airDensity: number;
+}
+
+export interface ClassicModelConfig {
+  mathMode: SimMathMode;
+  maxNeighborsSampled: number;
+  maxForce: number;
+  drag: number;
+  minDistance: number;
+  hardMinDistance: number;
+  jitterStrength: number;
+}
+
 const MAX_BIRD_CAPACITY = 10_000;
 
 function randomSeed32(): number {
@@ -138,6 +180,77 @@ export class WasmSimClient {
 
   setMathMode(mode: SimMathMode): void {
     this.sim.set_math_mode(mode === "fast" ? 1 : 0);
+  }
+
+  setModelKind(kind: SimModelKind): void {
+    const kindId =
+      kind === "flock2-social"
+        ? 1
+        : kind === "flock2-social-flight"
+          ? 2
+          : kind === "f2-lite-social"
+            ? 3
+            : kind === "f2-lite-social-flight"
+              ? 4
+              : 0;
+    this.sim.set_model_kind(kindId);
+  }
+
+  getModelKind(): SimModelKind {
+    const kindId = this.sim.model_kind();
+    switch (kindId) {
+      case 1:
+        return "flock2-social";
+      case 2:
+        return "flock2-social-flight";
+      case 3:
+        return "f2-lite-social";
+      case 4:
+        return "f2-lite-social-flight";
+      default:
+        return "classic";
+    }
+  }
+
+  setClassicConfig(config: ClassicModelConfig): void {
+    this.sim.set_classic_config(
+      config.mathMode === "fast" ? 1 : 0,
+      Math.max(0, Math.floor(config.maxNeighborsSampled)),
+      Math.max(0, config.maxForce),
+      Math.max(0, config.drag),
+      Math.max(0, config.minDistance),
+      Math.max(0, config.hardMinDistance),
+      Math.max(0, config.jitterStrength),
+    );
+  }
+
+  setFlock2SocialConfig(config: Flock2SocialConfig): void {
+    this.sim.set_flock2_social_config(
+      config.avoidWeight,
+      config.alignWeight,
+      config.cohesionWeight,
+      config.boundaryWeight,
+      config.boundaryCount,
+      config.neighborRadius,
+      Math.max(1, Math.floor(config.topologicalNeighbors)),
+      config.fieldOfViewDeg,
+    );
+  }
+
+  setFlock2FlightConfig(config: Flock2FlightConfig): void {
+    this.sim.set_flock2_flight_config(
+      config.reactionTimeMs,
+      config.dynamicStability,
+      config.mass,
+      config.wingArea,
+      config.liftFactor,
+      config.dragFactor,
+      config.thrust,
+      config.minSpeed,
+      config.maxSpeed,
+      config.gravity,
+      config.airDensity,
+    );
   }
 
   getMathMode(): SimMathMode {
