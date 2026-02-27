@@ -8,7 +8,7 @@ Goal: a lightweight, high-resolution “murmuration” background with **real bo
 
 - [x] Task 0 — Repo + Tooling Baseline
 - [x] Task 1 — Data Model + Public API Contracts
-- [ ] Task 2 — Pixi WebGL Renderer Skeleton
+- [x] Task 2 — Pixi WebGL Renderer Skeleton
 - [ ] Task 3 — Neighbor Search Module
 - [ ] Task 4 — Real Boids Forces
 - [ ] Task 5 — Accuracy vs Compute Swappability

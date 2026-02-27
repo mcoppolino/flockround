@@ -1,0 +1,196 @@
+import { Application, MeshSimple, Texture } from "pixi.js";
+import type { BLEND_MODES } from "pixi.js";
+
+export interface FlockTheme {
+  backgroundColor: number;
+  backgroundAlpha: number;
+  particleColor: number;
+  particleAlpha: number;
+  blendMode: BLEND_MODES;
+  particleSize: number;
+}
+
+export interface FlockViewOptions {
+  dprCap?: number;
+  renderScale?: number;
+}
+
+const UVS_PER_PARTICLE = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]);
+
+export const DEFAULT_FLOCK_THEME: FlockTheme = {
+  backgroundColor: 0x04070d,
+  backgroundAlpha: 1.0,
+  particleColor: 0xcfe7ff,
+  particleAlpha: 0.72,
+  blendMode: "add",
+  particleSize: 2.4,
+};
+
+export class FlockView {
+  private readonly host: HTMLElement;
+  private readonly app: Application;
+  private readonly dprCap: number;
+  private readonly renderScale: number;
+  private readonly particleTexture: Texture;
+
+  private theme: FlockTheme;
+  private mesh: MeshSimple | null = null;
+  private vertices: Float32Array = new Float32Array(0);
+  private particleCount = 0;
+
+  private constructor(
+    host: HTMLElement,
+    app: Application,
+    particleTexture: Texture,
+    options?: FlockViewOptions,
+  ) {
+    this.host = host;
+    this.app = app;
+    this.particleTexture = particleTexture;
+    this.dprCap = options?.dprCap ?? 2;
+    this.renderScale = options?.renderScale ?? 1;
+    this.theme = DEFAULT_FLOCK_THEME;
+  }
+
+  static async create(
+    host: HTMLElement,
+    options?: FlockViewOptions,
+  ): Promise<FlockView> {
+    const app = new Application();
+    const renderer = new FlockView(
+      host,
+      app,
+      FlockView.createParticleTexture(),
+      options,
+    );
+    await renderer.init();
+    return renderer;
+  }
+
+  setTheme(theme: FlockTheme): void {
+    this.theme = theme;
+    this.app.renderer.background.color = theme.backgroundColor;
+    this.app.renderer.background.alpha = theme.backgroundAlpha;
+
+    if (!this.mesh) {
+      return;
+    }
+
+    this.mesh.tint = theme.particleColor;
+    this.mesh.alpha = theme.particleAlpha;
+    this.mesh.blendMode = theme.blendMode;
+  }
+
+  render(positions: Float32Array): void {
+    const nextCount = positions.length >>> 1;
+    if (!this.mesh || nextCount !== this.particleCount) {
+      this.rebuildMesh(nextCount);
+    }
+
+    if (!this.mesh || nextCount === 0) {
+      return;
+    }
+
+    const width = this.app.screen.width * this.renderScale;
+    const height = this.app.screen.height * this.renderScale;
+    const halfSize = this.theme.particleSize * 0.5;
+
+    for (let i = 0; i < nextCount; i += 1) {
+      const p = i * 2;
+      const x = positions[p] * width;
+      const y = positions[p + 1] * height;
+      const v = i * 8;
+
+      this.vertices[v] = x - halfSize;
+      this.vertices[v + 1] = y - halfSize;
+      this.vertices[v + 2] = x + halfSize;
+      this.vertices[v + 3] = y - halfSize;
+      this.vertices[v + 4] = x + halfSize;
+      this.vertices[v + 5] = y + halfSize;
+      this.vertices[v + 6] = x - halfSize;
+      this.vertices[v + 7] = y + halfSize;
+    }
+
+    this.mesh.geometry.getBuffer("aPosition").update();
+  }
+
+  resize(): void {
+    const resolution = Math.min(window.devicePixelRatio || 1, this.dprCap);
+    this.app.renderer.resolution = resolution;
+    this.app.renderer.resize(this.host.clientWidth, this.host.clientHeight);
+  }
+
+  private async init(): Promise<void> {
+    await this.app.init({
+      antialias: false,
+      autoDensity: true,
+      resolution: Math.min(window.devicePixelRatio || 1, this.dprCap),
+      backgroundColor: this.theme.backgroundColor,
+      backgroundAlpha: this.theme.backgroundAlpha,
+      resizeTo: this.host,
+    });
+
+    this.host.appendChild(this.app.canvas);
+    this.setTheme(this.theme);
+  }
+
+  private rebuildMesh(count: number): void {
+    if (this.mesh) {
+      this.app.stage.removeChild(this.mesh);
+      this.mesh.destroy();
+      this.mesh = null;
+    }
+
+    this.particleCount = count;
+    this.vertices = new Float32Array(count * 8);
+    const uvs = new Float32Array(count * 8);
+    const indices = new Uint32Array(count * 6);
+
+    for (let i = 0; i < count; i += 1) {
+      const u = i * 8;
+      uvs.set(UVS_PER_PARTICLE, u);
+
+      const baseIndex = i * 6;
+      const vertexOffset = i * 4;
+      indices[baseIndex] = vertexOffset;
+      indices[baseIndex + 1] = vertexOffset + 1;
+      indices[baseIndex + 2] = vertexOffset + 2;
+      indices[baseIndex + 3] = vertexOffset;
+      indices[baseIndex + 4] = vertexOffset + 2;
+      indices[baseIndex + 5] = vertexOffset + 3;
+    }
+
+    this.mesh = new MeshSimple({
+      texture: this.particleTexture,
+      vertices: this.vertices,
+      uvs,
+      indices,
+    });
+    this.mesh.blendMode = this.theme.blendMode;
+    this.mesh.alpha = this.theme.particleAlpha;
+    this.mesh.tint = this.theme.particleColor;
+    this.app.stage.addChild(this.mesh);
+  }
+
+  private static createParticleTexture(): Texture {
+    const canvas = document.createElement("canvas");
+    canvas.width = 32;
+    canvas.height = 32;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("Unable to create 2D context for particle texture");
+    }
+
+    ctx.clearRect(0, 0, 32, 32);
+    const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+    gradient.addColorStop(0, "rgba(255,255,255,1)");
+    gradient.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(16, 16, 16, 0, Math.PI * 2);
+    ctx.fill();
+
+    return Texture.from(canvas);
+  }
+}

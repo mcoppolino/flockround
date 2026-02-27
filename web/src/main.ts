@@ -1,4 +1,4 @@
-import { Application, Color } from "pixi.js";
+import { DEFAULT_FLOCK_THEME, FlockView } from "./render";
 import { initWasmModule } from "./wasm";
 import "./style.css";
 
@@ -11,17 +11,15 @@ async function start(): Promise<void> {
   const sim = await initWasmModule();
   sim.setBounds(window.innerWidth, window.innerHeight);
 
-  const app = new Application();
-  await app.init({
-    background: new Color(0x04070d),
-    resizeTo: window,
-    antialias: true,
+  const view = await FlockView.create(host, {
+    dprCap: 2,
+    renderScale: 1,
   });
-
-  host.appendChild(app.canvas);
+  view.setTheme(DEFAULT_FLOCK_THEME);
 
   window.addEventListener("resize", () => {
     sim.setBounds(window.innerWidth, window.innerHeight);
+    view.resize();
   });
 
   let previousTime = performance.now();
@@ -33,6 +31,7 @@ async function start(): Promise<void> {
     const dt = Math.min(rawDt, 0.05);
 
     sim.step(dt);
+    view.render(sim.getPositions());
 
     if (frameCount % 90 === 0) {
       const positions = sim.getPositions();
