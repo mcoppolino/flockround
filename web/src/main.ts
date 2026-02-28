@@ -34,6 +34,8 @@ const DEFAULT_DRAG = 0.09;
 const DEFAULT_MIN_DISTANCE = 0.5;
 const DEFAULT_HARD_MIN_DISTANCE = 0.02;
 const DEFAULT_JITTER_STRENGTH = 0.6;
+const DEFAULT_SHAPE_ATTRACTOR_WEIGHT = 0.02;
+const DEFAULT_SHAPE_POINTS_XYZ = new Float32Array([0.5, 0.5, 0.5]);
 const DEFAULT_ACTIVE_BIRDS = 1_000;
 const DEFAULT_MODEL_KIND: SimModelKind = "classic";
 const DEFAULT_BIRD_SIZE = DEFAULT_FLOCK_THEME.particleSize;
@@ -193,6 +195,7 @@ async function start(): Promise<void> {
   let birdSize = DEFAULT_BIRD_SIZE;
   let birdOpacity = DEFAULT_BIRD_OPACITY;
   let birdShape: BirdShape = DEFAULT_BIRD_SHAPE;
+  let shapeAttractorWeight = DEFAULT_SHAPE_ATTRACTOR_WEIGHT;
   let menuOpen = DEFAULT_MENU_OPEN;
   const classicConfig: ClassicModelConfig = { ...DEFAULT_CLASSIC_CONFIG };
   const flock2Social: Flock2SocialConfig = { ...DEFAULT_FLOCK2_SOCIAL };
@@ -209,6 +212,8 @@ async function start(): Promise<void> {
   sim.setAxisBounce(bounceX, bounceY, bounceZ);
   sim.setClassicConfig(classicConfig);
   sim.setActiveCount(activeBoids);
+  sim.setShapeAttractorWeight(shapeAttractorWeight);
+  sim.setShapePoints(DEFAULT_SHAPE_POINTS_XYZ);
 
   const view = await FlockView.create(host, {
     dprCap: 2,
@@ -268,79 +273,81 @@ async function start(): Promise<void> {
       classicConfig.mathMode === "fast" ? "Math: Fast" : "Math: Accurate";
     controls.kValueLabel.textContent =
       classicConfig.maxNeighborsSampled === 0
-        ? "k=inf"
-        : `k=${classicConfig.maxNeighborsSampled}`;
+        ? "k=inf (neighbor cap)"
+        : `k=${classicConfig.maxNeighborsSampled} (neighbor cap)`;
     controls.kSlider.value = String(
       neighborCapToSliderIndex(classicConfig.maxNeighborsSampled),
     );
-    controls.birdCountValueLabel.textContent = `n=${activeBoids}/${totalBoids}`;
+    controls.birdCountValueLabel.textContent = `n=${activeBoids}/${totalBoids} (active birds)`;
     controls.birdCountSlider.value = String(activeBoids);
-    controls.maxForceValueLabel.textContent = `f=${classicConfig.maxForce.toFixed(3)}`;
+    controls.maxForceValueLabel.textContent = `f=${classicConfig.maxForce.toFixed(3)} (max steer)`;
     controls.maxForceSlider.value = classicConfig.maxForce.toFixed(3);
     const dragNorm = rangeToNormalized(classicConfig.drag, DRAG_UI_MAX);
-    controls.dragValueLabel.textContent = `g=${dragNorm.toFixed(3)} (${classicConfig.drag.toFixed(3)})`;
+    controls.dragValueLabel.textContent = `g=${dragNorm.toFixed(3)} (${classicConfig.drag.toFixed(3)} drag)`;
     controls.dragSlider.value = dragNorm.toFixed(3);
-    controls.birdOpacityValueLabel.textContent = `op=${birdOpacity.toFixed(2)}`;
+    controls.shapeAttractorValueLabel.textContent = `sa=${shapeAttractorWeight.toFixed(3)} (shape attract)`;
+    controls.shapeAttractorSlider.value = shapeAttractorWeight.toFixed(3);
+    controls.birdOpacityValueLabel.textContent = `op=${birdOpacity.toFixed(2)} (bird opacity)`;
     controls.birdOpacitySlider.value = birdOpacity.toFixed(2);
-    controls.birdSizeValueLabel.textContent = `size=${birdSize.toFixed(2)}`;
+    controls.birdSizeValueLabel.textContent = `size=${birdSize.toFixed(2)} (bird size)`;
     controls.birdSizeSlider.value = birdSize.toFixed(2);
     controls.birdColorInput.value = rgbNumberToHex(birdColor);
     controls.birdShapeSelect.value = birdShape;
     controls.birdShapeValueLabel.textContent =
       birdShape === "dot"
-        ? "shape=Dot"
+        ? "shape=Dot (bird sprite)"
         : birdShape === "arrow"
-          ? "shape=Arrow"
-          : "shape=Chevron";
-    controls.minDistanceValueLabel.textContent = `d=${classicConfig.minDistance.toFixed(3)}`;
+          ? "shape=Arrow (bird sprite)"
+          : "shape=Chevron (bird sprite)";
+    controls.minDistanceValueLabel.textContent = `d=${classicConfig.minDistance.toFixed(3)} (soft min dist)`;
     controls.minDistanceSlider.value = classicConfig.minDistance.toFixed(3);
-    controls.hardMinDistanceValueLabel.textContent = `h=${classicConfig.hardMinDistance.toFixed(3)}`;
+    controls.hardMinDistanceValueLabel.textContent = `h=${classicConfig.hardMinDistance.toFixed(3)} (hard min dist)`;
     controls.hardMinDistanceSlider.value =
       classicConfig.hardMinDistance.toFixed(3);
-    controls.jitterValueLabel.textContent = `j=${classicConfig.jitterStrength.toFixed(3)}`;
+    controls.jitterValueLabel.textContent = `j=${classicConfig.jitterStrength.toFixed(3)} (jitter)`;
     controls.jitterSlider.value = classicConfig.jitterStrength.toFixed(3);
-    controls.f2NeighborRadiusValueLabel.textContent = `r=${flock2Social.neighborRadius.toFixed(3)}`;
+    controls.f2NeighborRadiusValueLabel.textContent = `r=${flock2Social.neighborRadius.toFixed(3)} (neighbor radius)`;
     controls.f2NeighborRadiusSlider.value =
       flock2Social.neighborRadius.toFixed(3);
-    controls.f2TopologicalValueLabel.textContent = `k=${flock2Social.topologicalNeighbors}`;
+    controls.f2TopologicalValueLabel.textContent = `k=${flock2Social.topologicalNeighbors} (neighbor count)`;
     controls.f2TopologicalSlider.value = String(
       flock2Social.topologicalNeighbors,
     );
-    controls.f2FovValueLabel.textContent = `fov=${flock2Social.fieldOfViewDeg.toFixed(0)}`;
+    controls.f2FovValueLabel.textContent = `fov=${flock2Social.fieldOfViewDeg.toFixed(0)} (view angle)`;
     controls.f2FovSlider.value = flock2Social.fieldOfViewDeg.toFixed(0);
-    controls.f2AvoidValueLabel.textContent = `av=${flock2Social.avoidWeight.toFixed(3)}`;
+    controls.f2AvoidValueLabel.textContent = `av=${flock2Social.avoidWeight.toFixed(3)} (avoid wt)`;
     controls.f2AvoidSlider.value = flock2Social.avoidWeight.toFixed(3);
-    controls.f2AlignValueLabel.textContent = `al=${flock2Social.alignWeight.toFixed(3)}`;
+    controls.f2AlignValueLabel.textContent = `al=${flock2Social.alignWeight.toFixed(3)} (align wt)`;
     controls.f2AlignSlider.value = flock2Social.alignWeight.toFixed(3);
-    controls.f2CohesionValueLabel.textContent = `co=${flock2Social.cohesionWeight.toFixed(3)}`;
+    controls.f2CohesionValueLabel.textContent = `co=${flock2Social.cohesionWeight.toFixed(3)} (cohesion wt)`;
     controls.f2CohesionSlider.value = flock2Social.cohesionWeight.toFixed(3);
-    controls.f2BoundaryWeightValueLabel.textContent = `bw=${flock2Social.boundaryWeight.toFixed(3)}`;
+    controls.f2BoundaryWeightValueLabel.textContent = `bw=${flock2Social.boundaryWeight.toFixed(3)} (boundary wt)`;
     controls.f2BoundaryWeightSlider.value =
       flock2Social.boundaryWeight.toFixed(3);
-    controls.f2BoundaryCountValueLabel.textContent = `bc=${flock2Social.boundaryCount.toFixed(1)}`;
+    controls.f2BoundaryCountValueLabel.textContent = `bc=${flock2Social.boundaryCount.toFixed(1)} (boundary crowd)`;
     controls.f2BoundaryCountSlider.value =
       flock2Social.boundaryCount.toFixed(1);
-    controls.f2ReactionValueLabel.textContent = `rt=${flock2Flight.reactionTimeMs.toFixed(0)}ms`;
+    controls.f2ReactionValueLabel.textContent = `rt=${flock2Flight.reactionTimeMs.toFixed(0)}ms (reaction)`;
     controls.f2ReactionSlider.value = flock2Flight.reactionTimeMs.toFixed(0);
-    controls.f2StabilityValueLabel.textContent = `ds=${flock2Flight.dynamicStability.toFixed(3)}`;
+    controls.f2StabilityValueLabel.textContent = `ds=${flock2Flight.dynamicStability.toFixed(3)} (stability)`;
     controls.f2StabilitySlider.value = flock2Flight.dynamicStability.toFixed(3);
-    controls.f2MassValueLabel.textContent = `m=${flock2Flight.mass.toFixed(3)}`;
+    controls.f2MassValueLabel.textContent = `m=${flock2Flight.mass.toFixed(3)} (mass)`;
     controls.f2MassSlider.value = flock2Flight.mass.toFixed(3);
-    controls.f2WingAreaValueLabel.textContent = `A=${flock2Flight.wingArea.toFixed(4)}`;
+    controls.f2WingAreaValueLabel.textContent = `A=${flock2Flight.wingArea.toFixed(4)} (wing area)`;
     controls.f2WingAreaSlider.value = flock2Flight.wingArea.toFixed(4);
-    controls.f2LiftValueLabel.textContent = `cl=${flock2Flight.liftFactor.toFixed(3)}`;
+    controls.f2LiftValueLabel.textContent = `cl=${flock2Flight.liftFactor.toFixed(3)} (lift)`;
     controls.f2LiftSlider.value = flock2Flight.liftFactor.toFixed(3);
-    controls.f2AeroDragValueLabel.textContent = `cd=${flock2Flight.dragFactor.toFixed(3)}`;
+    controls.f2AeroDragValueLabel.textContent = `cd=${flock2Flight.dragFactor.toFixed(3)} (drag)`;
     controls.f2AeroDragSlider.value = flock2Flight.dragFactor.toFixed(3);
-    controls.f2ThrustValueLabel.textContent = `th=${flock2Flight.thrust.toFixed(3)}`;
+    controls.f2ThrustValueLabel.textContent = `th=${flock2Flight.thrust.toFixed(3)} (thrust)`;
     controls.f2ThrustSlider.value = flock2Flight.thrust.toFixed(3);
-    controls.f2MinSpeedValueLabel.textContent = `vmin=${flock2Flight.minSpeed.toFixed(2)}`;
+    controls.f2MinSpeedValueLabel.textContent = `vmin=${flock2Flight.minSpeed.toFixed(2)} (min speed)`;
     controls.f2MinSpeedSlider.value = flock2Flight.minSpeed.toFixed(2);
-    controls.f2MaxSpeedValueLabel.textContent = `vmax=${flock2Flight.maxSpeed.toFixed(2)}`;
+    controls.f2MaxSpeedValueLabel.textContent = `vmax=${flock2Flight.maxSpeed.toFixed(2)} (max speed)`;
     controls.f2MaxSpeedSlider.value = flock2Flight.maxSpeed.toFixed(2);
-    controls.f2GravityValueLabel.textContent = `g=${flock2Flight.gravity.toFixed(2)}`;
+    controls.f2GravityValueLabel.textContent = `g=${flock2Flight.gravity.toFixed(2)} (gravity)`;
     controls.f2GravitySlider.value = flock2Flight.gravity.toFixed(2);
-    controls.f2AirDensityValueLabel.textContent = `rho=${flock2Flight.airDensity.toFixed(3)}`;
+    controls.f2AirDensityValueLabel.textContent = `rho=${flock2Flight.airDensity.toFixed(3)} (air density)`;
     controls.f2AirDensitySlider.value = flock2Flight.airDensity.toFixed(3);
     controls.menuButton.textContent = menuOpen ? "Menu: On" : "Menu: Off";
     const isClassic = modelKind === "classic";
@@ -430,6 +437,12 @@ async function start(): Promise<void> {
     const dragNorm = Number.parseFloat(controls.dragSlider.value);
     classicConfig.drag = normalizedToRange(dragNorm, DRAG_UI_MAX);
     applyActiveModelSettings();
+    updateDebugState();
+  });
+
+  controls.shapeAttractorSlider.addEventListener("input", () => {
+    shapeAttractorWeight = Number.parseFloat(controls.shapeAttractorSlider.value);
+    sim.setShapeAttractorWeight(shapeAttractorWeight);
     updateDebugState();
   });
 
@@ -797,6 +810,8 @@ function createDebugControls(
   maxForceValueLabel: HTMLSpanElement;
   dragSlider: HTMLInputElement;
   dragValueLabel: HTMLSpanElement;
+  shapeAttractorSlider: HTMLInputElement;
+  shapeAttractorValueLabel: HTMLSpanElement;
   birdSizeSlider: HTMLInputElement;
   birdSizeValueLabel: HTMLSpanElement;
   minDistanceSlider: HTMLInputElement;
@@ -973,7 +988,7 @@ function createDebugControls(
   kSlider.title = "k: max neighbors sampled per boid (inf means unbounded).";
 
   const kValueLabel = document.createElement("span");
-  kValueLabel.textContent = `k=${DEFAULT_NEIGHBOR_CAP}`;
+  kValueLabel.textContent = `k=${DEFAULT_NEIGHBOR_CAP} (neighbor cap)`;
   kValueLabel.style.display = "inline-flex";
   kValueLabel.style.alignItems = "center";
   kValueLabel.style.height = "20px";
@@ -995,7 +1010,7 @@ function createDebugControls(
   birdCountSlider.title = "n: active bird count simulated and rendered.";
 
   const birdCountValueLabel = document.createElement("span");
-  birdCountValueLabel.textContent = `n=${defaultActiveBirds}/${maxBirds}`;
+  birdCountValueLabel.textContent = `n=${defaultActiveBirds}/${maxBirds} (active birds)`;
   birdCountValueLabel.style.display = "inline-flex";
   birdCountValueLabel.style.alignItems = "center";
   birdCountValueLabel.style.height = "20px";
@@ -1018,7 +1033,7 @@ function createDebugControls(
     "f: maximum steering force magnitude cap (limit_magnitude_3d); f=0 disables steering.";
 
   const maxForceValueLabel = document.createElement("span");
-  maxForceValueLabel.textContent = `f=${DEFAULT_MAX_FORCE.toFixed(3)}`;
+  maxForceValueLabel.textContent = `f=${DEFAULT_MAX_FORCE.toFixed(3)} (max steer)`;
   maxForceValueLabel.style.display = "inline-flex";
   maxForceValueLabel.style.alignItems = "center";
   maxForceValueLabel.style.height = "20px";
@@ -1040,13 +1055,36 @@ function createDebugControls(
   dragSlider.title = "g: normalized drag 0..1 (maps to 0..6 1/s damping).";
 
   const dragValueLabel = document.createElement("span");
-  dragValueLabel.textContent = `g=${rangeToNormalized(DEFAULT_DRAG, DRAG_UI_MAX).toFixed(3)} (${DEFAULT_DRAG.toFixed(3)})`;
+  dragValueLabel.textContent = `g=${rangeToNormalized(DEFAULT_DRAG, DRAG_UI_MAX).toFixed(3)} (${DEFAULT_DRAG.toFixed(3)} drag)`;
   dragValueLabel.style.display = "inline-flex";
   dragValueLabel.style.alignItems = "center";
   dragValueLabel.style.height = "20px";
   dragValueLabel.style.padding = "0 4px";
   dragValueLabel.style.color = "#e6f0ff";
   dragValueLabel.style.font =
+    '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
+  const shapeAttractorSlider = document.createElement("input");
+  shapeAttractorSlider.type = "range";
+  shapeAttractorSlider.min = "0.000";
+  shapeAttractorSlider.max = "2.000";
+  shapeAttractorSlider.step = "0.001";
+  shapeAttractorSlider.value = DEFAULT_SHAPE_ATTRACTOR_WEIGHT.toFixed(3);
+  shapeAttractorSlider.style.width = "90px";
+  shapeAttractorSlider.style.height = "20px";
+  shapeAttractorSlider.style.margin = "0";
+  shapeAttractorSlider.style.cursor = "pointer";
+  shapeAttractorSlider.title =
+    "sa: shape attractor weight toward configured attractor points.";
+
+  const shapeAttractorValueLabel = document.createElement("span");
+  shapeAttractorValueLabel.textContent = `sa=${DEFAULT_SHAPE_ATTRACTOR_WEIGHT.toFixed(3)} (shape attract)`;
+  shapeAttractorValueLabel.style.display = "inline-flex";
+  shapeAttractorValueLabel.style.alignItems = "center";
+  shapeAttractorValueLabel.style.height = "20px";
+  shapeAttractorValueLabel.style.padding = "0 4px";
+  shapeAttractorValueLabel.style.color = "#e6f0ff";
+  shapeAttractorValueLabel.style.font =
     '500 10px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
 
   const birdSizeSlider = document.createElement("input");
@@ -1062,7 +1100,7 @@ function createDebugControls(
   birdSizeSlider.title = "size: rendered bird size in pixels.";
 
   const birdSizeValueLabel = document.createElement("span");
-  birdSizeValueLabel.textContent = `size=${DEFAULT_BIRD_SIZE.toFixed(2)}`;
+  birdSizeValueLabel.textContent = `size=${DEFAULT_BIRD_SIZE.toFixed(2)} (bird size)`;
   birdSizeValueLabel.style.display = "inline-flex";
   birdSizeValueLabel.style.alignItems = "center";
   birdSizeValueLabel.style.height = "20px";
@@ -1084,7 +1122,7 @@ function createDebugControls(
   birdOpacitySlider.title = "op: bird opacity.";
 
   const birdOpacityValueLabel = document.createElement("span");
-  birdOpacityValueLabel.textContent = `op=${DEFAULT_BIRD_OPACITY.toFixed(2)}`;
+  birdOpacityValueLabel.textContent = `op=${DEFAULT_BIRD_OPACITY.toFixed(2)} (bird opacity)`;
   birdOpacityValueLabel.style.display = "inline-flex";
   birdOpacityValueLabel.style.alignItems = "center";
   birdOpacityValueLabel.style.height = "20px";
@@ -1128,7 +1166,7 @@ function createDebugControls(
   });
 
   const birdShapeValueLabel = document.createElement("span");
-  birdShapeValueLabel.textContent = "shape=Dot";
+  birdShapeValueLabel.textContent = "shape=Dot (bird sprite)";
   birdShapeValueLabel.style.display = "inline-flex";
   birdShapeValueLabel.style.alignItems = "center";
   birdShapeValueLabel.style.height = "20px";
@@ -1151,7 +1189,7 @@ function createDebugControls(
     "d: soft minimum separation (boids force shaping) in world units.";
 
   const minDistanceValueLabel = document.createElement("span");
-  minDistanceValueLabel.textContent = `d=${DEFAULT_MIN_DISTANCE.toFixed(3)}`;
+  minDistanceValueLabel.textContent = `d=${DEFAULT_MIN_DISTANCE.toFixed(3)} (soft min dist)`;
   minDistanceValueLabel.style.display = "inline-flex";
   minDistanceValueLabel.style.alignItems = "center";
   minDistanceValueLabel.style.height = "20px";
@@ -1174,7 +1212,7 @@ function createDebugControls(
     "h: hard post-step distance floor in world units (applied with tiny incremental corrections).";
 
   const hardMinDistanceValueLabel = document.createElement("span");
-  hardMinDistanceValueLabel.textContent = `h=${DEFAULT_HARD_MIN_DISTANCE.toFixed(3)}`;
+  hardMinDistanceValueLabel.textContent = `h=${DEFAULT_HARD_MIN_DISTANCE.toFixed(3)} (hard min dist)`;
   hardMinDistanceValueLabel.style.display = "inline-flex";
   hardMinDistanceValueLabel.style.alignItems = "center";
   hardMinDistanceValueLabel.style.height = "20px";
@@ -1196,7 +1234,7 @@ function createDebugControls(
   jitterSlider.title = "j: random steering jitter magnitude in force units.";
 
   const jitterValueLabel = document.createElement("span");
-  jitterValueLabel.textContent = `j=${DEFAULT_JITTER_STRENGTH.toFixed(3)}`;
+  jitterValueLabel.textContent = `j=${DEFAULT_JITTER_STRENGTH.toFixed(3)} (jitter)`;
   jitterValueLabel.style.display = "inline-flex";
   jitterValueLabel.style.alignItems = "center";
   jitterValueLabel.style.height = "20px";
@@ -1311,7 +1349,7 @@ function createDebugControls(
     "0.001",
     "0.100",
     "F2 neighbor radius.",
-    "r=0.100",
+    "r=0.100 (neighbor radius)",
   );
   const f2Topological = createF2Slider(
     "1",
@@ -1319,7 +1357,7 @@ function createDebugControls(
     "1",
     "7",
     "F2 topological neighbors.",
-    "k=7",
+    "k=7 (neighbor count)",
   );
   const f2Fov = createF2Slider(
     "30",
@@ -1327,7 +1365,7 @@ function createDebugControls(
     "1",
     "290",
     "F2 field of view in degrees.",
-    "fov=290",
+    "fov=290 (view angle)",
   );
   const f2Avoid = createF2Slider(
     "0.000",
@@ -1335,7 +1373,7 @@ function createDebugControls(
     "0.001",
     "0.020",
     "F2 avoidance strength.",
-    "av=0.020",
+    "av=0.020 (avoid wt)",
   );
   const f2Align = createF2Slider(
     "0.000",
@@ -1343,7 +1381,7 @@ function createDebugControls(
     "0.001",
     "0.600",
     "F2 alignment strength.",
-    "al=0.600",
+    "al=0.600 (align wt)",
   );
   const f2Cohesion = createF2Slider(
     "0.000",
@@ -1351,7 +1389,7 @@ function createDebugControls(
     "0.001",
     "0.004",
     "F2 cohesion strength.",
-    "co=0.004",
+    "co=0.004 (cohesion wt)",
   );
   const f2BoundaryWeight = createF2Slider(
     "0.000",
@@ -1359,7 +1397,7 @@ function createDebugControls(
     "0.001",
     "0.100",
     "F2 boundary strength.",
-    "bw=0.100",
+    "bw=0.100 (boundary wt)",
   );
   const f2BoundaryCount = createF2Slider(
     "0.0",
@@ -1367,7 +1405,7 @@ function createDebugControls(
     "0.5",
     "20.0",
     "F2 boundary count term.",
-    "bc=20.0",
+    "bc=20.0 (boundary crowd)",
   );
   const f2Reaction = createF2Slider(
     "25",
@@ -1375,7 +1413,7 @@ function createDebugControls(
     "1",
     "250",
     "F2 reaction speed in ms.",
-    "rt=250ms",
+    "rt=250ms (reaction)",
   );
   const f2Stability = createF2Slider(
     "0.000",
@@ -1383,7 +1421,7 @@ function createDebugControls(
     "0.001",
     "0.700",
     "F2 dynamic stability.",
-    "ds=0.700",
+    "ds=0.700 (stability)",
   );
   const f2Mass = createF2Slider(
     "0.010",
@@ -1391,7 +1429,7 @@ function createDebugControls(
     "0.001",
     "0.080",
     "Mass (kg).",
-    "m=0.080",
+    "m=0.080 (mass)",
   );
   const f2WingArea = createF2Slider(
     "0.0010",
@@ -1399,7 +1437,7 @@ function createDebugControls(
     "0.0001",
     "0.0224",
     "Wing area.",
-    "A=0.0224",
+    "A=0.0224 (wing area)",
   );
   const f2Lift = createF2Slider(
     "0.000",
@@ -1407,7 +1445,7 @@ function createDebugControls(
     "0.001",
     "0.571",
     "Lift coefficient factor.",
-    "cl=0.571",
+    "cl=0.571 (lift)",
   );
   const f2AeroDrag = createF2Slider(
     "0.000",
@@ -1415,7 +1453,7 @@ function createDebugControls(
     "0.001",
     "0.173",
     "Drag coefficient factor.",
-    "cd=0.173",
+    "cd=0.173 (drag)",
   );
   const f2Thrust = createF2Slider(
     "0.000",
@@ -1423,7 +1461,7 @@ function createDebugControls(
     "0.001",
     "0.237",
     "Thrust scalar.",
-    "th=0.237",
+    "th=0.237 (thrust)",
   );
   const f2MinSpeed = createF2Slider(
     "0.00",
@@ -1431,7 +1469,7 @@ function createDebugControls(
     "0.01",
     "5.00",
     "Minimum speed.",
-    "vmin=5.00",
+    "vmin=5.00 (min speed)",
   );
   const f2MaxSpeed = createF2Slider(
     "0.00",
@@ -1439,7 +1477,7 @@ function createDebugControls(
     "0.01",
     "18.00",
     "Maximum speed.",
-    "vmax=18.00",
+    "vmax=18.00 (max speed)",
   );
   const f2Gravity = createF2Slider(
     "0.00",
@@ -1447,7 +1485,7 @@ function createDebugControls(
     "0.01",
     "9.80",
     "Gravity.",
-    "g=9.80",
+    "g=9.80 (gravity)",
   );
   const f2AirDensity = createF2Slider(
     "0.100",
@@ -1455,13 +1493,17 @@ function createDebugControls(
     "0.001",
     "1.225",
     "Air density.",
-    "rho=1.225",
+    "rho=1.225 (air density)",
   );
 
   const kRow = createSliderRow(kSlider, kValueLabel);
   const birdCountRow = createSliderRow(birdCountSlider, birdCountValueLabel);
   const maxForceRow = createSliderRow(maxForceSlider, maxForceValueLabel);
   const dragRow = createSliderRow(dragSlider, dragValueLabel);
+  const shapeAttractorRow = createSliderRow(
+    shapeAttractorSlider,
+    shapeAttractorValueLabel,
+  );
   const birdOpacityRow = createSliderRow(
     birdOpacitySlider,
     birdOpacityValueLabel,
@@ -1493,7 +1535,12 @@ function createDebugControls(
   );
   const jitterRow = createSliderRow(jitterSlider, jitterValueLabel);
   const legendTokens: ControlLegendTokens = {
-    simCore: ["model", "math", legendTokenFromLabel(birdCountValueLabel.textContent)],
+    simCore: [
+      "model",
+      "math",
+      legendTokenFromLabel(birdCountValueLabel.textContent),
+      legendTokenFromLabel(shapeAttractorValueLabel.textContent),
+    ],
     classic: [
       legendTokenFromLabel(kValueLabel.textContent),
       legendTokenFromLabel(maxForceValueLabel.textContent),
@@ -1572,6 +1619,7 @@ function createDebugControls(
     birdCountRow,
     maxForceRow,
     dragRow,
+    shapeAttractorRow,
     minDistanceRow,
     hardMinDistanceRow,
     jitterRow,
@@ -1653,6 +1701,8 @@ function createDebugControls(
     maxForceValueLabel,
     dragSlider,
     dragValueLabel,
+    shapeAttractorSlider,
+    shapeAttractorValueLabel,
     birdSizeSlider,
     birdSizeValueLabel,
     minDistanceSlider,
@@ -1740,6 +1790,7 @@ function modelLegendText(
     model: "sim model",
     math: "precision/speed",
     n: "bird count",
+    sa: "shape attract weight",
   };
   const cosmeticsDescriptions: Record<string, string> = {
     color: "tint",

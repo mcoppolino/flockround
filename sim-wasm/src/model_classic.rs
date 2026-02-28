@@ -13,7 +13,8 @@ impl Sim {
             || ((self.config.sep_weight <= EPSILON
                 && self.config.align_weight <= EPSILON
                 && self.config.coh_weight <= EPSILON)
-                && self.config.jitter_strength <= EPSILON);
+                && self.config.jitter_strength <= EPSILON
+                && self.config.shape_attractor_weight <= EPSILON);
         let drag_damping = if self.config.drag <= EPSILON {
             1.0
         } else {
@@ -304,6 +305,11 @@ impl Sim {
                 force_z += hash_unit(self.step_index, i as u32, 2) * self.config.jitter_strength;
             }
         }
+
+        let (shape_force_x, shape_force_y, shape_force_z) = self.shape_attractor_force(i);
+        force_x += shape_force_x;
+        force_y += shape_force_y;
+        force_z += shape_force_z * self.z_force_scale;
 
         let (fx, fy, fz) = math::limit_magnitude_3d(
             self.config.math_mode,

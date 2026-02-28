@@ -295,6 +295,18 @@ export class WasmSimClient {
     return this.sim.drag();
   }
 
+  setShapeAttractorWeight(weight: number): void {
+    this.sim.set_shape_attractor_weight(Math.max(0, weight));
+  }
+
+  getShapeAttractorWeight(): number {
+    return this.sim.shape_attractor_weight();
+  }
+
+  setShapePoints(pointsXyz: Float32Array): void {
+    this.sim.set_shape_points_xyz(pointsXyz);
+  }
+
   setMinDistance(minDistance: number): void {
     this.sim.set_min_distance(Math.max(0, minDistance));
   }

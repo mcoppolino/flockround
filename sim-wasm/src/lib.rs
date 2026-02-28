@@ -38,6 +38,10 @@ const DEFAULT_JITTER_STRENGTH: f32 = 0.01;
 const MIN_DRAG: f32 = 0.0;
 const MAX_DRAG: f32 = 6.0;
 const DEFAULT_DRAG: f32 = 0.0;
+const MIN_SHAPE_ATTRACTOR_WEIGHT: f32 = 0.0;
+const MAX_SHAPE_ATTRACTOR_WEIGHT: f32 = 5.0;
+const DEFAULT_SHAPE_ATTRACTOR_WEIGHT: f32 = 0.02;
+const MAX_SHAPE_POINTS: usize = 128;
 const HARD_CONSTRAINT_RELAXATION: f32 = 0.05;
 const HARD_CONSTRAINT_MAX_PUSH: f32 = 0.0025;
 
@@ -112,6 +116,7 @@ struct SimConfig {
     hard_min_distance: f32,
     jitter_strength: f32,
     drag: f32,
+    shape_attractor_weight: f32,
 }
 
 impl Default for SimConfig {
@@ -131,6 +136,7 @@ impl Default for SimConfig {
             hard_min_distance: DEFAULT_HARD_MIN_DISTANCE,
             jitter_strength: DEFAULT_JITTER_STRENGTH,
             drag: DEFAULT_DRAG,
+            shape_attractor_weight: DEFAULT_SHAPE_ATTRACTOR_WEIGHT,
         }
     }
 }
@@ -188,6 +194,12 @@ impl SimConfig {
             DEFAULT_JITTER_STRENGTH,
         );
         self.drag = clamp_finite(self.drag, MIN_DRAG, MAX_DRAG, DEFAULT_DRAG);
+        self.shape_attractor_weight = clamp_finite(
+            self.shape_attractor_weight,
+            MIN_SHAPE_ATTRACTOR_WEIGHT,
+            MAX_SHAPE_ATTRACTOR_WEIGHT,
+            DEFAULT_SHAPE_ATTRACTOR_WEIGHT,
+        );
     }
 }
 
@@ -220,6 +232,7 @@ pub struct Sim {
     render_xy: Vec<f32>,
     render_z: Vec<f32>,
     render_heading_xy: Vec<f32>,
+    shape_points_xyz: Vec<f32>,
     neighbor_grid: NeighborGrid,
     neighbors_visited_last_step: usize,
     step_index: u32,
@@ -247,6 +260,7 @@ impl Sim {
         let mut render_xy = vec![0.0; count * 2];
         let mut render_z = vec![DEFAULT_Z_LAYER; count];
         let mut render_heading_xy = vec![0.0; count * 2];
+        let shape_points_xyz = vec![0.5, 0.5, DEFAULT_Z_LAYER];
 
         for i in 0..count {
             pos_x[i] = rng.next_f32();
@@ -299,6 +313,7 @@ impl Sim {
             render_xy,
             render_z,
             render_heading_xy,
+            shape_points_xyz,
             neighbor_grid: NeighborGrid::new(count, WORLD_SIZE, WORLD_SIZE, config.neighbor_radius),
             neighbors_visited_last_step: 0,
             step_index: 0,
@@ -332,6 +347,7 @@ impl Sim {
             hard_min_distance: self.config.hard_min_distance,
             jitter_strength: self.config.jitter_strength,
             drag: self.config.drag,
+            shape_attractor_weight: self.config.shape_attractor_weight,
         };
         self.config.sanitize();
 
@@ -563,6 +579,43 @@ impl Sim {
         self.config.drag
     }
 
+    pub fn set_shape_attractor_weight(&mut self, weight: f32) {
+        self.config.shape_attractor_weight = clamp_finite(
+            weight,
+            MIN_SHAPE_ATTRACTOR_WEIGHT,
+            MAX_SHAPE_ATTRACTOR_WEIGHT,
+            DEFAULT_SHAPE_ATTRACTOR_WEIGHT,
+        );
+    }
+
+    pub fn shape_attractor_weight(&self) -> f32 {
+        self.config.shape_attractor_weight
+    }
+
+    pub fn set_shape_points_xyz(&mut self, points_xyz: &[f32]) {
+        self.shape_points_xyz.clear();
+
+        let capped_values = points_xyz.len().min(MAX_SHAPE_POINTS * 3);
+        let usable_values = capped_values - (capped_values % 3);
+        for point in points_xyz[..usable_values].chunks_exact(3) {
+            self.shape_points_xyz
+                .push(clamp_finite(point[0], 0.0, 1.0, 0.5));
+            self.shape_points_xyz
+                .push(clamp_finite(point[1], 0.0, 1.0, 0.5));
+            self.shape_points_xyz
+                .push(clamp_finite(point[2], 0.0, 1.0, DEFAULT_Z_LAYER));
+        }
+
+        if self.shape_points_xyz.is_empty() {
+            self.shape_points_xyz
+                .extend_from_slice(&[0.5, 0.5, DEFAULT_Z_LAYER]);
+        }
+    }
+
+    pub fn shape_point_count(&self) -> usize {
+        self.shape_points_xyz.len() / 3
+    }
+
     pub fn step(&mut self, dt: f32) {
         let dt = dt.clamp(DT_MIN, DT_MAX);
         if dt <= 0.0 || self.active_count == 0 {
@@ -637,6 +690,71 @@ impl Sim {
 }
 
 impl Sim {
+    fn shape_attractor_direction(&self, i: usize) -> Option<(f32, f32, f32)> {
+        if self.config.shape_attractor_weight <= EPSILON || self.shape_points_xyz.len() < 3 {
+            return None;
+        }
+
+        let wrap_x = !self.bounce_x;
+        let wrap_y = !self.bounce_y;
+        let wrap_z = !self.bounce_z;
+        let px = self.pos_x[i];
+        let py = self.pos_y[i];
+        let pz = if self.z_mode_enabled {
+            self.pos_z[i]
+        } else {
+            DEFAULT_Z_LAYER
+        };
+
+        let mut best_dx = 0.0;
+        let mut best_dy = 0.0;
+        let mut best_dz = 0.0;
+        let mut best_dist_sq = f32::MAX;
+
+        for point in self.shape_points_xyz.chunks_exact(3) {
+            let dx = axis_delta(point[0] - px, wrap_x);
+            let dy = axis_delta(point[1] - py, wrap_y);
+            let dz = if self.z_mode_enabled {
+                axis_delta(point[2] - pz, wrap_z)
+            } else {
+                0.0
+            };
+            let dist_sq = math::distance_sq_3d(dx, dy, dz);
+            if dist_sq < best_dist_sq {
+                best_dist_sq = dist_sq;
+                best_dx = dx;
+                best_dy = dy;
+                best_dz = dz;
+            }
+        }
+
+        if best_dist_sq <= EPSILON || !best_dist_sq.is_finite() {
+            return None;
+        }
+
+        let (nx, ny, nz) = normalize_or_default(
+            best_dx,
+            best_dy,
+            if self.z_mode_enabled { best_dz } else { 0.0 },
+            1.0,
+            0.0,
+            0.0,
+        );
+        Some((nx, ny, nz))
+    }
+
+    fn shape_attractor_force(&self, i: usize) -> (f32, f32, f32) {
+        let Some((nx, ny, nz)) = self.shape_attractor_direction(i) else {
+            return (0.0, 0.0, 0.0);
+        };
+        let force = self.config.shape_attractor_weight;
+        (
+            nx * force,
+            ny * force,
+            if self.z_mode_enabled { nz * force } else { 0.0 },
+        )
+    }
+
     fn resolve_hard_min_distance_constraints(&mut self) {
         let hard_min_distance = self.config.hard_min_distance;
         if hard_min_distance <= EPSILON || self.active_count < 2 {

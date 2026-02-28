@@ -1,10 +1,10 @@
-use crate::{
-    axis_delta, clamp_finite, integrate_axis, math, ModelKind, Sim, DEFAULT_Z_LAYER, EPSILON,
-    WORLD_SIZE,
-};
 use crate::flock2::{
     dot3, heading_basis, normalize_or_default, rotate_vector_around_axis,
     FLOCK2_MAX_TOPOLOGICAL_NEIGHBORS, FLOCK2_WORLD_SCALE,
+};
+use crate::{
+    axis_delta, clamp_finite, integrate_axis, math, ModelKind, Sim, DEFAULT_Z_LAYER, EPSILON,
+    WORLD_SIZE,
 };
 
 impl Sim {
@@ -278,6 +278,15 @@ impl Sim {
                 };
             }
 
+            let (shape_force_x, shape_force_y, shape_force_z) = self.shape_attractor_force(i);
+            self.vel_x[i] += shape_force_x * dt;
+            self.vel_y[i] += shape_force_y * dt;
+            if self.z_mode_enabled {
+                self.vel_z[i] += shape_force_z * dt;
+            } else {
+                self.vel_z[i] = 0.0;
+            }
+
             let (vx, vy, vz) = math::normalize_to_magnitude(
                 self.config.math_mode,
                 self.vel_x[i],
@@ -446,6 +455,42 @@ impl Sim {
             } else {
                 0.0
             };
+
+            let (shape_force_x, shape_force_y, shape_force_z) = self.shape_attractor_force(i);
+            self.vel_x[i] += shape_force_x * dt;
+            self.vel_y[i] += shape_force_y * dt;
+            if self.z_mode_enabled {
+                self.vel_z[i] += shape_force_z * dt;
+            } else {
+                self.vel_z[i] = 0.0;
+            }
+
+            let (vx, vy, vz) = math::normalize_to_magnitude(
+                self.config.math_mode,
+                self.vel_x[i],
+                self.vel_y[i],
+                if self.z_mode_enabled {
+                    self.vel_z[i]
+                } else {
+                    0.0
+                },
+                clamp_finite(
+                    (self.vel_x[i] * self.vel_x[i]
+                        + self.vel_y[i] * self.vel_y[i]
+                        + if self.z_mode_enabled {
+                            self.vel_z[i] * self.vel_z[i]
+                        } else {
+                            0.0
+                        })
+                    .sqrt(),
+                    self.flock2_config.min_speed,
+                    self.flock2_config.max_speed,
+                    self.flock2_config.min_speed,
+                ),
+            );
+            self.vel_x[i] = vx;
+            self.vel_y[i] = vy;
+            self.vel_z[i] = if self.z_mode_enabled { vz } else { 0.0 };
 
             let vx_world = self.vel_x[i] * FLOCK2_WORLD_SCALE;
             let vy_world = self.vel_y[i] * FLOCK2_WORLD_SCALE;
@@ -770,7 +815,11 @@ impl Sim {
                 let inv_dist = 1.0 / dist_sq.sqrt();
                 let dir_x = dx * inv_dist;
                 let dir_y = dy * inv_dist;
-                let dir_z = if self.z_mode_enabled { dz * inv_dist } else { 0.0 };
+                let dir_z = if self.z_mode_enabled {
+                    dz * inv_dist
+                } else {
+                    0.0
+                };
                 let forward_dot = dot3(fwd_x, fwd_y, fwd_z, dir_x, dir_y, dir_z);
                 if forward_dot < fov_cos {
                     return true;
@@ -787,7 +836,11 @@ impl Sim {
                 let (avx, avy, avz) = normalize_or_default(
                     self.vel_x[j],
                     self.vel_y[j],
-                    if self.z_mode_enabled { self.vel_z[j] } else { 0.0 },
+                    if self.z_mode_enabled {
+                        self.vel_z[j]
+                    } else {
+                        0.0
+                    },
                     0.0,
                     0.0,
                     0.0,
@@ -835,14 +888,8 @@ impl Sim {
             } else {
                 0.0
             };
-            let (bcx, bcy, bcz) = normalize_or_default(
-                to_center_x,
-                to_center_y,
-                to_center_z,
-                0.0,
-                0.0,
-                0.0,
-            );
+            let (bcx, bcy, bcz) =
+                normalize_or_default(to_center_x, to_center_y, to_center_z, 0.0, 0.0, 0.0);
             target_x += bcx * self.flock2_config.boundary_weight * boundary_ratio;
             target_y += bcy * self.flock2_config.boundary_weight * boundary_ratio;
             target_z += bcz * self.flock2_config.boundary_weight * boundary_ratio;
